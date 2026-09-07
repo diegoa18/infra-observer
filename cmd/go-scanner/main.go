@@ -1,10 +1,14 @@
 package main
 
-//la main, por ahora solo el paquete de CLI :v
 import (
+	"fmt"
 	"go-scanner/internal/cli"
+	"os"
 )
 
 func main() {
-	cli.Execute()
+	if err := cli.Execute(os.Args[1:]); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
 }

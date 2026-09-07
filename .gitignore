@@ -1,8 +1,10 @@
-go-scanner
-go-scanner-web
-main
+/go-scanner
 *.exe
 *.out
+
+/vendor/
+.env
+.env.*
 
 .idea/
 *.swp
@@ -11,7 +13,3 @@ main
 
 .DS_Store
 Thumbs.db
-
-vendor/
-
-.env

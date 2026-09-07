@@ -1,113 +1,30 @@
-### build
+# go-scanner
 
-```bash
-go build ./cmd/go-scanner
-```
+Network Asset Discovery & Inventory
 
-### usage (TCP connect scan)
+## Purpose
 
-```bash
-go-scanner.exe tcp connect -p 1-500 google.com
-```
+go-scanner is a Linux CLI for discovering network hosts and identifying
+accessible TCP services.
 
-### Flags
+The project is being developed toward persistent infrastructure inventory,
+historical observations, and network change detection.
 
-#### `-p`
+## Current capabilities
 
-Ports to scan.
+- IPv4 address, CIDR, and hostname targets
+- ICMP host discovery
+- TCP-based host discovery fallback
+- TCP connect service discovery
+- Passive banner retrieval for common protocols
+- HTTP/HTTPS probing
+- Concurrent port scanning
+- Human-readable CLI output
 
-Supported formats:
+## Current limitations
 
-- Single port: `80`
-- Range: `1-1024`
-- List: `22,80,443`
-
-#### `--profile`
-
-Scan profile preset (default: `default`)
-
-Available profiles:
-
-- `passive`: Passive scan, no active probing (timeout: 2s, concurrency: 50)
-- `default`: Balanced scan, service detection only (timeout: 1s, concurrency: 100)
-- `aggressive`: Fast scan with active HTTP/HTTPS probing (timeout: 500ms, concurrency: 200)
-
-```bash
-go-scanner.exe tcp connect --profile passive -p 22,80,443 scanme.nmap.org
-```
-
-#### `--banner`
-
-Enable passive banner grabbing on supported ports (FTP, SSH, SMTP, POP3, IMAP).
-
-#### `--probe`
-
-Enable active probing on detected services. Can override profile settings.
-
-```bash
-# Use passive profile but enable active probing
-go-scanner.exe tcp connect --profile passive --probe -p 80,443 example.com
-```
-
-#### `--probe-types`
-
-Comma-separated list of probe types to run (default: http,https)
-
-#### `--timeout`
-
-Timeout per connection in milliseconds. Overrides profile default.
-
-```bash
-go-scanner.exe tcp connect --profile aggressive --timeout 2000 -p 1-1000 target.com
-```
-
-#### `--threads`
-
-Maximum number of concurrent connections. Overrides profile default.
-
-### Examples
-
-```bash
-# Default profile (implicit)
-go-scanner.exe tcp connect -p 80,443 google.com
-
-# Passive reconnaissance
-go-scanner.exe tcp connect --profile passive -p 1-1000 scanme.nmap.org
-
-# Aggressive scan with active probing
-go-scanner.exe tcp connect --profile aggressive -p 80,443,8080 target.com
-
-# Passive profile with active probing override
-go-scanner.exe tcp connect --profile passive --probe --banner -p 22,80,443 target.com
-```
-
-### Host Discovery (ICMP)
-
-New command to detect alive hosts using ICMP Echo Requests (Ping).
-
-> **Note:** This command usually requires Administrator/Root privileges to create raw sockets.
-
-```bash
-# Basic ICMP discovery
-go-scanner.exe discover icmp 8.8.8.8
-
-# With custom timeout (ms)
-go-scanner.exe discover icmp -timeout 500 192.168.1.1
-```
-
-### UDP Scan
-
-UDP port scanning with service detection.
-
-> **Note:** Running as root enables ICMP-based closed port detection. Without root privileges, UDP scan works but may report some closed ports as "open" or "filtered".
-
-```bash
-# Basic UDP scan
-go-scanner.exe udp -p 53,67,123,161 8.8.8.8
-
-# With custom timeout
-go-scanner.exe udp -p 53,161 --timeout 2000 target.com
-
-# Scan with all results
-go-scanner.exe udp -p 1-100 --all target.com
-```
+- No persistent inventory yet
+- No historical observations yet
+- No change detection yet
+- No PostgreSQL integration yet
+- IPv4 only

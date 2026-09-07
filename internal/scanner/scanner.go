@@ -1,42 +1,124 @@
 package scanner
 
 import (
+	"context"
+	"errors"
 	"fmt"
-	"go-scanner/internal/model"
+	"net"
+	"sync"
+	"syscall"
+	"time"
+
+	"go-scanner/internal/domain"
 )
 
-// ESTADO DEL PORT
-type PortState string
+func ScanPorts(
+	ctx context.Context,
+	target string,
+	ports []int,
+	timeout time.Duration,
+	concurrency int,
+) []domain.PortResult {
+	if len(ports) == 0 {
+		return nil
+	}
 
-const (
-	PortStateOpen     PortState = "OPEN"
-	PortStateClosed   PortState = "CLOSED"
-	PortStateFiltered PortState = "FILTERED"
-)
+	if concurrency <= 0 {
+		concurrency = 100
+	}
 
-// es el resultado del escaneo de un unico puerto
-type ScanResult struct {
-	Host     string //IP o hostname
-	Port     int
-	State    PortState // Estado explicito del puerto
-	Service  string    //nombre del servicio
-	Banner   string    //banner capturado
-	Error    error
-	Metadata *model.HostMetadata //contexto del host discovery
+	if concurrency > len(ports) {
+		concurrency = len(ports)
+	}
+
+	results := make([]domain.PortResult, len(ports))
+
+	jobs := make(chan int)
+
+	var wg sync.WaitGroup
+
+	for worker := 0; worker < concurrency; worker++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for index := range jobs {
+				results[index] = scanPort(
+					ctx,
+					target,
+					ports[index],
+					timeout,
+				)
+			}
+		}()
+	}
+
+	for index := range ports {
+		select {
+		case <-ctx.Done():
+			results[index] = domain.PortResult{
+				Port:  ports[index],
+				State: domain.PortUnknown,
+				Error: ctx.Err(),
+			}
+
+		case jobs <- index:
+		}
+	}
+
+	close(jobs)
+	wg.Wait()
+
+	return results
 }
 
-// IsOpen helper
-func (r ScanResult) IsOpen() bool {
-	return r.State == PortStateOpen
-}
+func scanPort(
+	ctx context.Context,
+	target string,
+	port int,
+	timeout time.Duration,
+) domain.PortResult {
+	result := domain.PortResult{
+		Port:  port,
+		State: domain.PortUnknown,
+	}
 
-// representacion bonita del resultado
-func (r ScanResult) String() string {
-	return fmt.Sprintf("[%s] Port %d: %s", r.Host, r.Port, r.State)
-}
+	if err := ctx.Err(); err != nil {
+		result.Error = err
+		return result
+	}
 
-// define el contrato para cualquier tipo de escaner
-type Scanner interface {
-	//ejecuta el escaneo sobre el target configurado y envia resultados al canal
-	Scan(results chan<- ScanResult)
+	address := net.JoinHostPort(
+		target,
+		fmt.Sprintf("%d", port),
+	)
+
+	dialer := net.Dialer{
+		Timeout: timeout,
+	}
+
+	conn, err := dialer.DialContext(
+		ctx,
+		"tcp",
+		address,
+	)
+	if err == nil {
+		conn.Close()
+
+		result.State = domain.PortOpen
+		return result
+	}
+
+	if ctx.Err() != nil {
+		result.Error = ctx.Err()
+		return result
+	}
+
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		result.State = domain.PortClosed
+		return result
+	}
+
+	return result
 }

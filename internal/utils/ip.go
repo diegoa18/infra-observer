@@ -1,118 +1,118 @@
 package utils
 
 import (
+	"encoding/binary"
 	"fmt"
 	"net"
-	"strconv"
-	"strings"
 )
 
-// toma una lista de targets y devuelve una lista de IPs
 func ParseTarget(target string) ([]string, error) {
-	//CIDR
-	if strings.Contains(target, "/") {
-		return parseCIDR(target)
+	if target == "" {
+		return nil, fmt.Errorf("target cannot be empty")
 	}
 
-	//rango manual
-	if strings.Contains(target, "-") {
-		return parseRange(target)
+	if ip := net.ParseIP(target); ip != nil {
+		ipv4 := ip.To4()
+		if ipv4 == nil {
+			return nil, fmt.Errorf("only IPv4 targets are supported")
+		}
+
+		return []string{ipv4.String()}, nil
 	}
 
-	//IP Unica (o host)
-	ip := net.ParseIP(target)
-	if ip != nil {
-		return []string{ip.String()}, nil
+	if _, network, err := net.ParseCIDR(target); err == nil {
+		if network.IP.To4() == nil {
+			return nil, fmt.Errorf("only IPv4 CIDR targets are supported")
+		}
+
+		return expandIPv4Network(network)
 	}
 
-	//si no es IP, puede ser hostname
-	ips, err := net.LookupHost(target)
+	ips, err := net.LookupIP(target)
 	if err != nil {
-		return nil, fmt.Errorf("invalid target or hostname resolution failed: %s", target)
-	}
-	// retornamos la primera IP resuelta por simplicidad
-	if len(ips) > 0 {
-		return []string{ips[0]}, nil
+		return nil, fmt.Errorf(
+			"resolve hostname %q: %w",
+			target,
+			err,
+		)
 	}
 
-	return nil, fmt.Errorf("could not resolve target: %s", target)
+	var result []string
+
+	seen := make(map[string]struct{})
+
+	for _, ip := range ips {
+		ipv4 := ip.To4()
+		if ipv4 == nil {
+			continue
+		}
+
+		address := ipv4.String()
+
+		if _, exists := seen[address]; exists {
+			continue
+		}
+
+		seen[address] = struct{}{}
+		result = append(result, address)
+	}
+
+	if len(result) == 0 {
+		return nil, fmt.Errorf(
+			"hostname %q has no IPv4 addresses",
+			target,
+		)
+	}
+
+	return result, nil
 }
 
-// parseCIDR toma una CIDR y devuelve una lista de IPs
-func parseCIDR(cidr string) ([]string, error) {
-	ip, ipnet, err := net.ParseCIDR(cidr)
-	if err != nil {
-		return nil, err
+func expandIPv4Network(network *net.IPNet) ([]string, error) {
+	ip := network.IP.To4()
+	if ip == nil {
+		return nil, fmt.Errorf("only IPv4 networks are supported")
 	}
 
-	var ips []string
-	for ip := ip.Mask(ipnet.Mask); ipnet.Contains(ip); inc(ip) {
-		ips = append(ips, ip.String())
+	ones, bits := network.Mask.Size()
+	if bits != 32 {
+		return nil, fmt.Errorf("invalid IPv4 network mask")
 	}
 
-	//escanear todo el rango es mas seguro para discovery
-	if len(ips) > 2 {
-		return ips[1 : len(ips)-1], nil
+	if ones < 20 {
+		return nil, fmt.Errorf(
+			"target network is too large: /%d; maximum supported size is /20",
+			ones,
+		)
 	}
-	return ips, nil
+
+	hostBits := bits - ones
+	count := 1 << hostBits
+
+	targets := make([]string, 0, count)
+
+	base := binary.BigEndian.Uint32(ip)
+
+	for i := 0; i < count; i++ {
+		current := base + uint32(i)
+
+		target := net.IPv4(
+			byte(current>>24),
+			byte(current>>16),
+			byte(current>>8),
+			byte(current),
+		).String()
+
+		targets = append(targets, target)
+	}
+
+	return targets, nil
 }
 
-func inc(ip net.IP) {
-	for j := len(ip) - 1; j >= 0; j-- {
-		ip[j]++
-		if ip[j] > 0 {
-			break
+func incrementIPv4(ip net.IP) {
+	for i := len(ip) - 1; i >= 0; i-- {
+		ip[i]++
+		if ip[i] != 0 {
+			return
 		}
 	}
-}
-
-// establece rango manual
-func parseRange(rangeStr string) ([]string, error) {
-	parts := strings.Split(rangeStr, "-")
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid range format")
-	}
-
-	startIPStr := parts[0]
-	endPart := parts[1] // puede ser una IP completa o solo el ultimo octeto
-
-	startIP := net.ParseIP(startIPStr)
-	if startIP == nil {
-		return nil, fmt.Errorf("invalid start IP")
-	}
-
-	//determinar si endPart es numero o IP
-	if strings.Contains(endPart, ".") {
-		//PENDIENTE: incremento de IP
-		return nil, fmt.Errorf("full IP range not supported yet, use last octet range (e.g. 192.168.1.1-50)")
-	}
-
-	//solo octeto final, por eso To4()
-	//ParseIP devuelve 16 bytes para IPv6
-	v4 := startIP.To4()
-	if v4 == nil {
-		return nil, fmt.Errorf("IPv6 ranges not supported yet")
-	}
-
-	startVal := int(v4[3])
-	endVal, err := strconv.Atoi(endPart)
-	if err != nil {
-		return nil, fmt.Errorf("invalid range end: %v", err)
-	}
-
-	if endVal < startVal {
-		return nil, fmt.Errorf("end range smaller than start")
-	}
-
-	var ips []string
-	base := v4[:3] //<- primeros 3 bytes
-	for i := startVal; i <= endVal; i++ {
-		if i > 255 {
-			break
-		}
-		newIP := net.IPv4(base[0], base[1], base[2], byte(i))
-		ips = append(ips, newIP.String())
-	}
-
-	return ips, nil
 }
