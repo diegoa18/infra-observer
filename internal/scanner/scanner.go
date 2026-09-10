@@ -8,9 +8,21 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"infra-observer/internal/domain"
 )
+
+type PortState string
+
+const (
+	PortOpen    PortState = "open"
+	PortClosed  PortState = "closed"
+	PortUnknown PortState = "unknown"
+)
+
+type PortResult struct {
+	Port  int
+	State PortState
+	Error error
+}
 
 func ScanPorts(
 	ctx context.Context,
@@ -18,7 +30,7 @@ func ScanPorts(
 	ports []int,
 	timeout time.Duration,
 	concurrency int,
-) []domain.PortResult {
+) []PortResult {
 	if len(ports) == 0 {
 		return nil
 	}
@@ -31,10 +43,9 @@ func ScanPorts(
 		concurrency = len(ports)
 	}
 
-	results := make([]domain.PortResult, len(ports))
+	results := make([]PortResult, len(ports))
 
 	jobs := make(chan int)
-
 	var wg sync.WaitGroup
 
 	for worker := 0; worker < concurrency; worker++ {
@@ -54,21 +65,27 @@ func ScanPorts(
 		}()
 	}
 
+dispatch:
 	for index := range ports {
 		select {
 		case <-ctx.Done():
-			results[index] = domain.PortResult{
-				Port:  ports[index],
-				State: domain.PortUnknown,
-				Error: ctx.Err(),
-			}
-
+			break dispatch
 		case jobs <- index:
 		}
 	}
 
 	close(jobs)
 	wg.Wait()
+
+	for index, result := range results {
+		if result.Port == 0 {
+			results[index] = PortResult{
+				Port:  ports[index],
+				State: PortUnknown,
+				Error: ctx.Err(),
+			}
+		}
+	}
 
 	return results
 }
@@ -78,15 +95,10 @@ func scanPort(
 	target string,
 	port int,
 	timeout time.Duration,
-) domain.PortResult {
-	result := domain.PortResult{
+) PortResult {
+	result := PortResult{
 		Port:  port,
-		State: domain.PortUnknown,
-	}
-
-	if err := ctx.Err(); err != nil {
-		result.Error = err
-		return result
+		State: PortUnknown,
 	}
 
 	address := net.JoinHostPort(
@@ -103,22 +115,24 @@ func scanPort(
 		"tcp",
 		address,
 	)
-	if err == nil {
-		conn.Close()
+	if err != nil {
+		if ctx.Err() != nil {
+			result.Error = ctx.Err()
+			return result
+		}
 
-		result.State = domain.PortOpen
+		if errors.Is(err, syscall.ECONNREFUSED) {
+			result.State = PortClosed
+			result.Error = err
+			return result
+		}
+
+		result.Error = err
 		return result
 	}
 
-	if ctx.Err() != nil {
-		result.Error = ctx.Err()
-		return result
-	}
+	defer conn.Close()
 
-	if errors.Is(err, syscall.ECONNREFUSED) {
-		result.State = domain.PortClosed
-		return result
-	}
-
+	result.State = PortOpen
 	return result
 }

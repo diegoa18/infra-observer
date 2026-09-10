@@ -79,6 +79,23 @@ func (s *ScanService) Scan(
 			opts.Concurrency,
 		)
 
+		portObservations := make(
+			[]domain.PortObservation,
+			0,
+			len(portResults),
+		)
+
+		for _, result := range portResults {
+			portObservations = append(
+				portObservations,
+				domain.PortObservation{
+					Port:     result.Port,
+					Protocol: "tcp",
+					State:    string(result.State),
+				},
+			)
+		}
+
 		services := detectServices(
 			ctx,
 			target,
@@ -96,6 +113,7 @@ func (s *ScanService) Scan(
 				RTT:    discoveryResult.RTT,
 				Reason: discoveryResult.Reason,
 			},
+			Ports:    portObservations,
 			Services: services,
 		}
 
@@ -112,9 +130,9 @@ func (s *ScanService) discover(
 	ctx context.Context,
 	target string,
 	opts ScanOptions,
-) (domain.DiscoveryResult, error) {
+) (discovery.Result, error) {
 	if !opts.Discovery {
-		return domain.DiscoveryResult{
+		return discovery.Result{
 			IP:        target,
 			Alive:     true,
 			Method:    "skipped",
@@ -165,7 +183,7 @@ func (s *ScanService) discover(
 func detectServices(
 	ctx context.Context,
 	target string,
-	portResults []domain.PortResult,
+	portResults []scanner.PortResult,
 	opts ScanOptions,
 ) []domain.Service {
 	var services []domain.Service
@@ -175,7 +193,7 @@ func detectServices(
 			return services
 		}
 
-		if result.State != domain.PortOpen {
+		if result.State != scanner.PortOpen {
 			continue
 		}
 
@@ -203,10 +221,8 @@ func detectServices(
 		}
 
 		if opts.HTTPProbe &&
-			isHTTPService(
-				result.Port,
-				detectionResult.Name,
-			) {
+			(detectionResult.Name == "HTTP" ||
+				detectionResult.Name == "HTTPS") {
 			probeResult, err := detection.ProbeHTTP(
 				target,
 				result.Port,
@@ -253,10 +269,9 @@ func grabPassiveBanner(
 		return ""
 	}
 
-	address := fmt.Sprintf(
-		"%s:%d",
+	address := net.JoinHostPort(
 		target,
-		port,
+		fmt.Sprintf("%d", port),
 	)
 
 	dialer := net.Dialer{
@@ -279,20 +294,4 @@ func grabPassiveBanner(
 		port,
 		timeout,
 	)
-}
-
-func isHTTPService(
-	port int,
-	serviceName string,
-) bool {
-	switch serviceName {
-	case "HTTP", "HTTPS":
-		return true
-
-	default:
-		return port == 80 ||
-			port == 443 ||
-			port == 8080 ||
-			port == 8443
-	}
 }

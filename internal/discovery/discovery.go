@@ -9,8 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"infra-observer/internal/domain"
-
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
 )
@@ -19,8 +17,8 @@ func DiscoverHost(
 	ctx context.Context,
 	target string,
 	timeout time.Duration,
-) (domain.DiscoveryResult, error) {
-	result := domain.DiscoveryResult{
+) (Result, error) {
+	result := Result{
 		IP:        target,
 		Method:    "icmp",
 		Timestamp: time.Now(),
@@ -45,7 +43,7 @@ func DiscoverHost(
 		Body: &icmp.Echo{
 			ID:   os.Getpid() & 0xffff,
 			Seq:  1,
-			Data: []byte("GO-SCANNER"),
+			Data: []byte("INFRA-OBSERVER"),
 		},
 	}
 
@@ -63,6 +61,7 @@ func DiscoverHost(
 	}
 
 	deadline := time.Now().Add(timeout)
+
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
@@ -119,8 +118,8 @@ func DiscoverHostTCP(
 	ctx context.Context,
 	target string,
 	timeout time.Duration,
-) (domain.DiscoveryResult, error) {
-	result := domain.DiscoveryResult{
+) (Result, error) {
+	result := Result{
 		IP:        target,
 		Method:    "tcp-connect",
 		Timestamp: time.Now(),
@@ -132,7 +131,10 @@ func DiscoverHostTCP(
 			return result, err
 		}
 
-		address := net.JoinHostPort(target, fmt.Sprintf("%d", port))
+		address := net.JoinHostPort(
+			target,
+			fmt.Sprintf("%d", port),
+		)
 
 		dialer := net.Dialer{
 			Timeout: timeout,
@@ -140,13 +142,20 @@ func DiscoverHostTCP(
 
 		start := time.Now()
 
-		conn, err := dialer.DialContext(ctx, "tcp", address)
+		conn, err := dialer.DialContext(
+			ctx,
+			"tcp",
+			address,
+		)
 		if err == nil {
 			conn.Close()
 
 			result.Alive = true
 			result.RTT = time.Since(start)
-			result.Reason = fmt.Sprintf("connection-established port-%d", port)
+			result.Reason = fmt.Sprintf(
+				"connection-established port-%d",
+				port,
+			)
 
 			return result, nil
 		}
@@ -154,7 +163,10 @@ func DiscoverHostTCP(
 		if isConnectionRefused(err) {
 			result.Alive = true
 			result.RTT = time.Since(start)
-			result.Reason = fmt.Sprintf("connection-refused port-%d", port)
+			result.Reason = fmt.Sprintf(
+				"connection-refused port-%d",
+				port,
+			)
 
 			return result, nil
 		}
