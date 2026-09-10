@@ -6,7 +6,7 @@ import (
 	"sort"
 	"text/tabwriter"
 
-	"go-scanner/internal/domain"
+	"infra-observer/internal/domain"
 )
 
 func PrintObservations(observations []domain.Observation) {

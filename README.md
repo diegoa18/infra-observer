@@ -1,10 +1,10 @@
-# go-scanner
+# infra-observer
 
 Network Asset Discovery & Inventory
 
 ## Purpose
 
-go-scanner is a Linux CLI for discovering network hosts and identifying
+infra-observer is a Linux CLI for discovering network hosts and identifying
 accessible TCP services.
 
 The project is being developed toward persistent infrastructure inventory,

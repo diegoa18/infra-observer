@@ -7,9 +7,9 @@ import (
 	"os"
 	"time"
 
-	"go-scanner/internal/application"
-	"go-scanner/internal/output"
-	"go-scanner/internal/utils"
+	"infra-observer/internal/application"
+	"infra-observer/internal/output"
+	"infra-observer/internal/utils"
 )
 
 const version = "0.1.0"
@@ -29,7 +29,7 @@ func Execute(args []string) error {
 		return nil
 
 	case "version":
-		fmt.Println("go-scanner", version)
+		fmt.Println("infra-observer", version)
 		return nil
 
 	default:
@@ -38,10 +38,10 @@ func Execute(args []string) error {
 }
 
 func printUsage() {
-	fmt.Println("go-scanner - Network Asset Discovery & Inventory")
+	fmt.Println("infra-observer - Network Asset Discovery & Inventory")
 	fmt.Println()
 	fmt.Println("Usage:")
-	fmt.Println("  go-scanner scan [flags] <target>")
+	fmt.Println("  infra-observer scan [flags] <target>")
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  scan       Discover hosts and accessible services")

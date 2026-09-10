@@ -6,10 +6,10 @@ import (
 	"net"
 	"time"
 
-	"go-scanner/internal/detection"
-	"go-scanner/internal/discovery"
-	"go-scanner/internal/domain"
-	"go-scanner/internal/scanner"
+	"infra-observer/internal/detection"
+	"infra-observer/internal/discovery"
+	"infra-observer/internal/domain"
+	"infra-observer/internal/scanner"
 )
 
 type ScanOptions struct {

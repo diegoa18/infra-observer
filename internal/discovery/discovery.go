@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"go-scanner/internal/domain"
+	"infra-observer/internal/domain"
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
