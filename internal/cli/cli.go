@@ -9,6 +9,7 @@ import (
 
 	"infra-observer/internal/application"
 	"infra-observer/internal/output"
+	"infra-observer/internal/storage/postgres"
 	"infra-observer/internal/utils"
 )
 
@@ -33,7 +34,10 @@ func Execute(args []string) error {
 		return nil
 
 	default:
-		return fmt.Errorf("unknown command: %s", args[0])
+		return fmt.Errorf(
+			"unknown command: %s",
+			args[0],
+		)
 	}
 }
 
@@ -54,10 +58,14 @@ func printUsage() {
 	fmt.Println("  -concurrency <n>    Maximum concurrent connections")
 	fmt.Println("  -no-discovery       Skip host discovery")
 	fmt.Println("  -probe              Enable HTTP/HTTPS probing")
+	fmt.Println("  -store              Store observations in PostgreSQL")
 }
 
 func handleScan(args []string) error {
-	cmd := flag.NewFlagSet("scan", flag.ContinueOnError)
+	cmd := flag.NewFlagSet(
+		"scan",
+		flag.ContinueOnError,
+	)
 
 	portRange := cmd.String(
 		"p",
@@ -89,6 +97,12 @@ func handleScan(args []string) error {
 		"Enable HTTP/HTTPS probing",
 	)
 
+	storeObservations := cmd.Bool(
+		"store",
+		false,
+		"Store observations in PostgreSQL",
+	)
+
 	cmd.SetOutput(os.Stderr)
 
 	if err := cmd.Parse(args); err != nil {
@@ -96,17 +110,29 @@ func handleScan(args []string) error {
 	}
 
 	if cmd.NArg() != 1 {
-		return fmt.Errorf("exactly one target is required")
+		return fmt.Errorf(
+			"exactly one target is required",
+		)
 	}
 
-	targets, err := utils.ParseTarget(cmd.Arg(0))
+	targets, err := utils.ParseTarget(
+		cmd.Arg(0),
+	)
 	if err != nil {
-		return fmt.Errorf("invalid target: %w", err)
+		return fmt.Errorf(
+			"invalid target: %w",
+			err,
+		)
 	}
 
-	ports, err := utils.ParsePortRange(*portRange)
+	ports, err := utils.ParsePortRange(
+		*portRange,
+	)
 	if err != nil {
-		return fmt.Errorf("invalid ports: %w", err)
+		return fmt.Errorf(
+			"invalid ports: %w",
+			err,
+		)
 	}
 
 	options := application.ScanOptions{
@@ -118,7 +144,38 @@ func handleScan(args []string) error {
 	}
 
 	ctx := context.Background()
+
+	var databaseStore *postgres.Store
+
+	if *storeObservations {
+		databaseURL := os.Getenv("DATABASE_URL")
+		if databaseURL == "" {
+			return fmt.Errorf(
+				"DATABASE_URL is required when -store is enabled",
+			)
+		}
+
+		connectCtx, cancel := context.WithTimeout(
+			ctx,
+			5*time.Second,
+		)
+
+		databaseStore, err = postgres.Open(
+			connectCtx,
+			databaseURL,
+		)
+
+		cancel()
+
+		if err != nil {
+			return err
+		}
+
+		defer databaseStore.Close()
+	}
+
 	service := application.NewScanService()
+
 	observations, err := service.Scan(
 		ctx,
 		targets,
@@ -128,6 +185,25 @@ func handleScan(args []string) error {
 		return err
 	}
 
+	if databaseStore != nil {
+		for _, observation := range observations {
+			if err := databaseStore.SaveObservation(
+				ctx,
+				observation,
+			); err != nil {
+				return err
+			}
+		}
+	}
+
 	output.PrintObservations(observations)
+
+	if databaseStore != nil {
+		fmt.Printf(
+			"Stored %d observation(s).\n",
+			len(observations),
+		)
+	}
+
 	return nil
 }
