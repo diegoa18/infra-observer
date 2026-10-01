@@ -26,6 +26,9 @@ func Execute(args []string) error {
 	case "scan":
 		return handleScan(args[1:])
 
+	case "history":
+		return handleHistory(args[1:])
+
 	case "changes":
 		return handleChanges(args[1:])
 
@@ -58,12 +61,18 @@ func printUsage() {
 		"  infra-observer scan [flags] <target>",
 	)
 	fmt.Println(
+		"  infra-observer history [flags] <target>",
+	)
+	fmt.Println(
 		"  infra-observer changes <target>",
 	)
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println(
 		"  scan       Discover hosts and accessible services",
+	)
+	fmt.Println(
+		"  history    Show stored observations for a target",
 	)
 	fmt.Println(
 		"  changes    Compare the two latest stored observations",
@@ -93,6 +102,11 @@ func printUsage() {
 	)
 	fmt.Println(
 		"  -store              Store observations in PostgreSQL",
+	)
+	fmt.Println()
+	fmt.Println("History flags:")
+	fmt.Println(
+		"  -limit <n>          Maximum observations to show",
 	)
 }
 
@@ -219,6 +233,74 @@ func handleScan(args []string) error {
 		fmt.Printf(
 			"Stored %d observation(s).\n",
 			len(observations),
+		)
+	}
+
+	return nil
+}
+
+func handleHistory(args []string) error {
+	cmd := flag.NewFlagSet(
+		"history",
+		flag.ContinueOnError,
+	)
+
+	limit := cmd.Int(
+		"limit",
+		10,
+		"Maximum observations to show",
+	)
+
+	cmd.SetOutput(os.Stderr)
+
+	if err := cmd.Parse(args); err != nil {
+		return err
+	}
+
+	if cmd.NArg() != 1 {
+		return fmt.Errorf(
+			"exactly one target is required",
+		)
+	}
+
+	if *limit <= 0 {
+		return fmt.Errorf(
+			"history limit must be greater than zero",
+		)
+	}
+
+	targets, err := utils.ParseTarget(
+		cmd.Arg(0),
+	)
+	if err != nil {
+		return fmt.Errorf(
+			"invalid target: %w",
+			err,
+		)
+	}
+
+	ctx := context.Background()
+
+	databaseStore, err := openDatabase(ctx)
+	if err != nil {
+		return err
+	}
+	defer databaseStore.Close()
+
+	for _, target := range targets {
+		observations, err :=
+			databaseStore.LatestObservations(
+				ctx,
+				target,
+				*limit,
+			)
+		if err != nil {
+			return err
+		}
+
+		output.PrintHistory(
+			target,
+			observations,
 		)
 	}
 
