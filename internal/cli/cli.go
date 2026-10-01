@@ -26,6 +26,9 @@ func Execute(args []string) error {
 	case "scan":
 		return handleScan(args[1:])
 
+	case "inventory":
+		return handleInventory(args[1:])
+
 	case "history":
 		return handleHistory(args[1:])
 
@@ -56,9 +59,13 @@ func printUsage() {
 		"infra-observer - Network Asset Discovery & Inventory",
 	)
 	fmt.Println()
+
 	fmt.Println("Usage:")
 	fmt.Println(
 		"  infra-observer scan [flags] <target>",
+	)
+	fmt.Println(
+		"  infra-observer inventory [target]",
 	)
 	fmt.Println(
 		"  infra-observer history [flags] <target>",
@@ -67,9 +74,13 @@ func printUsage() {
 		"  infra-observer changes <target>",
 	)
 	fmt.Println()
+
 	fmt.Println("Commands:")
 	fmt.Println(
 		"  scan       Discover hosts and accessible services",
+	)
+	fmt.Println(
+		"  inventory  Show the latest known infrastructure state",
 	)
 	fmt.Println(
 		"  history    Show stored observations for a target",
@@ -84,6 +95,7 @@ func printUsage() {
 		"  version    Show version",
 	)
 	fmt.Println()
+
 	fmt.Println("Scan flags:")
 	fmt.Println(
 		"  -p <ports>          Ports to scan",
@@ -104,6 +116,7 @@ func printUsage() {
 		"  -store              Store observations in PostgreSQL",
 	)
 	fmt.Println()
+
 	fmt.Println("History flags:")
 	fmt.Println(
 		"  -limit <n>          Maximum observations to show",
@@ -235,6 +248,61 @@ func handleScan(args []string) error {
 			len(observations),
 		)
 	}
+
+	return nil
+}
+
+func handleInventory(args []string) error {
+	cmd := flag.NewFlagSet(
+		"inventory",
+		flag.ContinueOnError,
+	)
+
+	cmd.SetOutput(os.Stderr)
+
+	if err := cmd.Parse(args); err != nil {
+		return err
+	}
+
+	if cmd.NArg() > 1 {
+		return fmt.Errorf(
+			"inventory accepts at most one target",
+		)
+	}
+
+	var targets []string
+
+	if cmd.NArg() == 1 {
+		var err error
+
+		targets, err = utils.ParseTarget(
+			cmd.Arg(0),
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"invalid target: %w",
+				err,
+			)
+		}
+	}
+
+	ctx := context.Background()
+
+	databaseStore, err := openDatabase(ctx)
+	if err != nil {
+		return err
+	}
+	defer databaseStore.Close()
+
+	inventory, err := databaseStore.Inventory(
+		ctx,
+		targets,
+	)
+	if err != nil {
+		return err
+	}
+
+	output.PrintInventory(inventory)
 
 	return nil
 }
