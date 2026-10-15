@@ -4,27 +4,28 @@ Network Asset Discovery & Inventory
 
 ## Purpose
 
-infra-observer is a Linux CLI for discovering network hosts and identifying
-accessible TCP services.
+infra-observer is a Linux CLI for discovering network hosts, identifying accessible TCP services, and maintaining a persistent infrastructure inventory.
 
-The project is being developed toward persistent infrastructure inventory,
-historical observations, and network change detection.
+The project tracks historical observations and detects network infrastructure changes over time to provide the latest known state per port.
 
 ## Current capabilities
 
 - IPv4 address, CIDR, and hostname targets
-- ICMP host discovery
-- TCP-based host discovery fallback
-- TCP connect service discovery
+- ICMP host discovery with TCP fallback
+- Concurrent TCP connect service discovery
 - Passive banner retrieval for common protocols
 - HTTP/HTTPS probing
-- Concurrent port scanning
+- PostgreSQL integration for persistent observations
+- Historical tracking of network states
+- Change detection between scans
+- Consolidated inventory showing the latest known state per port
 - Human-readable CLI output
+
+## Requirements
+
+- PostgreSQL database
+- `DATABASE_URL` environment variable exported (e.g., `postgres://user:pass@127.0.0.1:5432/infra_observer?sslmode=disable`)
 
 ## Current limitations
 
-- No persistent inventory yet
-- No historical observations yet
-- No change detection yet
-- No PostgreSQL integration yet
 - IPv4 only
