@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"infra-observer/internal/application"
@@ -205,7 +207,12 @@ func handleScan(args []string) error {
 		HTTPProbe:   *probe,
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
 
 	var databaseStore *postgres.Store
 
@@ -286,7 +293,12 @@ func handleInventory(args []string) error {
 		}
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
 
 	databaseStore, err := openDatabase(ctx)
 	if err != nil {
@@ -347,7 +359,12 @@ func handleHistory(args []string) error {
 		)
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
 
 	databaseStore, err := openDatabase(ctx)
 	if err != nil {
@@ -403,7 +420,12 @@ func handleChanges(args []string) error {
 		)
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(
+		context.Background(),
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+	defer stop()
 
 	databaseStore, err := openDatabase(ctx)
 	if err != nil {
