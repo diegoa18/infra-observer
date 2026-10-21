@@ -1,6 +1,7 @@
 package change
 
 import (
+	"fmt"
 	"sort"
 
 	"infra-observer/internal/domain"
@@ -29,6 +30,7 @@ type ServiceChange struct {
 	AfterName   string
 	BeforeState string
 	AfterState  string
+	Details     string
 }
 
 type Result struct {
@@ -164,9 +166,13 @@ func Compare(
 
 		case existedBefore && existsNow:
 			if before.Name == after.Name &&
-				before.State == after.State {
+				before.State == after.State &&
+				before.Banner == after.Banner &&
+				metadataEqual(before.Metadata, after.Metadata) {
 				continue
 			}
+
+			details := describeServiceDrift(before, after)
 
 			result.Services = append(
 				result.Services,
@@ -178,6 +184,7 @@ func Compare(
 					AfterName:   after.Name,
 					BeforeState: string(before.State),
 					AfterState:  string(after.State),
+					Details:     details,
 				},
 			)
 		}
@@ -210,6 +217,65 @@ func Compare(
 	})
 
 	return result
+}
+
+func metadataEqual(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k, va := range a {
+		if k == "detection_method" {
+			continue
+		}
+		if vb, ok := b[k]; !ok || vb != va {
+			return false
+		}
+	}
+	return true
+}
+
+func describeServiceDrift(before, after domain.Service) string {
+	var changes []string
+
+	if before.Name != after.Name {
+		changes = append(changes, fmt.Sprintf("name: %s -> %s", before.Name, after.Name))
+	}
+
+	if before.Banner != after.Banner {
+		changes = append(changes, fmt.Sprintf("banner: %q -> %q", before.Banner, after.Banner))
+	}
+
+	for k, vAfter := range after.Metadata {
+		if k == "detection_method" {
+			continue
+		}
+		vBefore := before.Metadata[k]
+		if vBefore != vAfter {
+			changes = append(changes, fmt.Sprintf("%s: %q -> %q", k, vBefore, vAfter))
+		}
+	}
+
+	if len(changes) == 0 {
+		return "state/config updated"
+	}
+
+	return sortAndJoinChanges(changes)
+}
+
+func sortAndJoinChanges(changes []string) string {
+	sort.Strings(changes)
+	return sortJoin(changes, ", ")
+}
+
+func sortJoin(items []string, sep string) string {
+	res := ""
+	for i, item := range items {
+		if i > 0 {
+			res += sep
+		}
+		res += item
+	}
+	return res
 }
 
 func (r Result) Empty() bool {

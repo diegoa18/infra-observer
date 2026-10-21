@@ -76,7 +76,7 @@ func printInventoryAsset(
 
 	fmt.Fprintln(
 		w,
-		"PORT\tPROTOCOL\tSTATE\tSERVICE\tLAST OBSERVED",
+		"PORT\tPROTOCOL\tSTATE\tSERVICE\tLAST OBSERVED\tDETAILS",
 	)
 
 	for _, port := range asset.Ports {
@@ -88,7 +88,7 @@ func printInventoryAsset(
 
 		fmt.Fprintf(
 			w,
-			"%d\t%s\t%s\t%s\t%s\n",
+			"%d\t%s\t%s\t%s\t%s\t%s\n",
 			port.Port,
 			port.Protocol,
 			port.State,
@@ -96,6 +96,7 @@ func printInventoryAsset(
 			port.LastObservedAt.Format(
 				time.RFC3339,
 			),
+			formatServiceDetails(port.Service),
 		)
 	}
 

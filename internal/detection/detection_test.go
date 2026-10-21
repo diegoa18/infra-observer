@@ -1,6 +1,15 @@
 package detection
 
-import "testing"
+import (
+	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strconv"
+	"testing"
+	"time"
+)
 
 func TestDetectServiceByPort(t *testing.T) {
 	tests := []struct {
@@ -106,6 +115,24 @@ func TestDetectServiceByBanner(t *testing.T) {
 			banner: "220 smtp.example.com ESMTP",
 			want:   "SMTP",
 		},
+		{
+			name:   "pop3",
+			port:   110,
+			banner: "+OK Dovecot ready.",
+			want:   "POP3",
+		},
+		{
+			name:   "imap",
+			port:   143,
+			banner: "* OK [CAPABILITY IMAP4rev1] Dovecot ready.",
+			want:   "IMAP",
+		},
+		{
+			name:   "mysql",
+			port:   3306,
+			banner: "J 8.0.36-0ubuntu0.22.04.1 mysql_native_password",
+			want:   "MySQL",
+		},
 	}
 
 	for _, tt := range tests {
@@ -131,5 +158,51 @@ func TestDetectServiceByBanner(t *testing.T) {
 				)
 			}
 		})
+	}
+}
+
+func TestSanitizeBannerStripsNullAndControlBytes(t *testing.T) {
+	raw := []byte("J\x00\x00\x00\x0a8.0.36-MariaDB\x00\x1b[31mmysql_native_password\x00\r\n")
+	got := sanitizeBanner(raw)
+	want := "J 8.0.36-MariaDB[31mmysql_native_password"
+
+	if got != want {
+		t.Fatalf("sanitizeBanner() = %q, want %q", got, want)
+	}
+}
+
+func TestProbeTLSAndHTTPSWithSelfSignedCert(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Server", "infra-test-tls")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	parsedURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("url.Parse() error = %v", err)
+	}
+
+	host, portStr, err := net.SplitHostPort(parsedURL.Host)
+	if err != nil {
+		t.Fatalf("net.SplitHostPort() error = %v", err)
+	}
+
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("strconv.Atoi() error = %v", err)
+	}
+
+	tlsResult, err := ProbeTLS(context.Background(), host, port, time.Second)
+	if err != nil {
+		t.Fatalf("ProbeTLS() error = %v", err)
+	}
+
+	if tlsResult.Version == "" || tlsResult.Version == "unknown" {
+		t.Fatalf("expected valid TLS version, got %q", tlsResult.Version)
+	}
+
+	if tlsResult.NotAfter == "" {
+		t.Fatal("expected certificate NotAfter timestamp")
 	}
 }

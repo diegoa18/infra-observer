@@ -97,24 +97,32 @@ func printServiceChanges(
 
 	fmt.Fprintln(
 		w,
-		"TYPE\tPORT\tPROTOCOL\tBEFORE\tAFTER",
+		"TYPE\tPORT\tPROTOCOL\tSERVICE\tDETAILS",
 	)
 
 	for _, item := range changes {
+		serviceDesc := serviceDescription(item.BeforeName, item.BeforeState)
+		if item.Kind == change.ServiceModified && item.BeforeName != item.AfterName {
+			serviceDesc = fmt.Sprintf("%s -> %s", serviceDescription(item.BeforeName, item.BeforeState), serviceDescription(item.AfterName, item.AfterState))
+		} else if item.Kind == change.ServiceAdded {
+			serviceDesc = serviceDescription(item.AfterName, item.AfterState)
+		} else if item.Kind == change.ServiceRemoved {
+			serviceDesc = serviceDescription(item.BeforeName, item.BeforeState)
+		}
+
+		details := item.Details
+		if details == "" {
+			details = "-"
+		}
+
 		fmt.Fprintf(
 			w,
 			"%s\t%d\t%s\t%s\t%s\n",
 			item.Kind,
 			item.Port,
 			item.Protocol,
-			serviceDescription(
-				item.BeforeName,
-				item.BeforeState,
-			),
-			serviceDescription(
-				item.AfterName,
-				item.AfterState,
-			),
+			serviceDesc,
+			details,
 		)
 	}
 

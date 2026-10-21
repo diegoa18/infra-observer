@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"text/tabwriter"
 
 	"infra-observer/internal/domain"
@@ -128,19 +129,60 @@ func printServices(services []domain.Service) {
 
 	fmt.Fprintln(
 		w,
-		"PORT\tPROTOCOL\tSERVICE\tSTATE",
+		"PORT\tPROTOCOL\tSERVICE\tSTATE\tDETAILS",
 	)
 
 	for _, service := range servicesCopy {
 		fmt.Fprintf(
 			w,
-			"%d\t%s\t%s\t%s\n",
+			"%d\t%s\t%s\t%s\t%s\n",
 			service.Port,
 			service.Protocol,
 			service.Name,
 			service.State,
+			formatServiceDetails(&service),
 		)
 	}
 
 	w.Flush()
+}
+
+func formatServiceDetails(service *domain.Service) string {
+	if service == nil {
+		return "-"
+	}
+
+	var parts []string
+
+	if service.Banner != "" {
+		parts = append(
+			parts,
+			fmt.Sprintf("banner=%q", service.Banner),
+		)
+	}
+
+	if len(service.Metadata) > 0 {
+		keys := make([]string, 0, len(service.Metadata))
+		for k, v := range service.Metadata {
+			if k == "detection_method" || v == "" {
+				continue
+			}
+			keys = append(keys, k)
+		}
+
+		sort.Strings(keys)
+
+		for _, k := range keys {
+			parts = append(
+				parts,
+				fmt.Sprintf("%s=%s", k, service.Metadata[k]),
+			)
+		}
+	}
+
+	if len(parts) == 0 {
+		return "-"
+	}
+
+	return strings.Join(parts, ", ")
 }

@@ -337,32 +337,65 @@ func detectServices(
 			},
 		}
 
-		if opts.HTTPProbe &&
-			(detectionResult.Name == "HTTP" ||
-				detectionResult.Name == "HTTPS") {
-			probeResult, err := detection.ProbeHTTP(
-				target,
-				result.Port,
-				opts.Timeout,
-			)
+		if opts.HTTPProbe {
+			if detectionResult.Name == "HTTP" ||
+				detectionResult.Name == "HTTPS" {
+				probeResult, err := detection.ProbeHTTP(
+					ctx,
+					target,
+					result.Port,
+					opts.Timeout,
+				)
 
-			if err == nil {
-				if probeResult.StatusCode != 0 {
-					service.Metadata["http_status_code"] =
-						fmt.Sprintf(
-							"%d",
-							probeResult.StatusCode,
-						)
+				if err == nil {
+					if probeResult.StatusCode != 0 {
+						service.Metadata["http_status_code"] =
+							fmt.Sprintf(
+								"%d",
+								probeResult.StatusCode,
+							)
+					}
+
+					if probeResult.Server != "" {
+						service.Metadata["http_server"] =
+							probeResult.Server
+					}
+
+					if probeResult.PoweredBy != "" {
+						service.Metadata["http_powered_by"] =
+							probeResult.PoweredBy
+					}
 				}
+			}
 
-				if probeResult.Server != "" {
-					service.Metadata["http_server"] =
-						probeResult.Server
-				}
+			if detection.SupportsTLSProbe(result.Port, detectionResult.Name) {
+				tlsResult, err := detection.ProbeTLS(
+					ctx,
+					target,
+					result.Port,
+					opts.Timeout,
+				)
 
-				if probeResult.PoweredBy != "" {
-					service.Metadata["http_powered_by"] =
-						probeResult.PoweredBy
+				if err == nil {
+					if tlsResult.Version != "" {
+						service.Metadata["tls_version"] = tlsResult.Version
+					}
+
+					if tlsResult.Subject != "" {
+						service.Metadata["tls_subject"] = tlsResult.Subject
+					}
+
+					if tlsResult.Issuer != "" {
+						service.Metadata["tls_issuer"] = tlsResult.Issuer
+					}
+
+					if tlsResult.SANs != "" {
+						service.Metadata["tls_sans"] = tlsResult.SANs
+					}
+
+					if tlsResult.NotAfter != "" {
+						service.Metadata["tls_not_after"] = tlsResult.NotAfter
+					}
 				}
 			}
 		}
