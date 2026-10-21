@@ -19,9 +19,8 @@ func DiscoverHost(
 	timeout time.Duration,
 ) (Result, error) {
 	result := Result{
-		IP:        target,
-		Method:    "icmp",
-		Timestamp: time.Now(),
+		IP:     target,
+		Method: "icmp",
 	}
 
 	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
@@ -118,14 +117,16 @@ func DiscoverHostTCP(
 	ctx context.Context,
 	target string,
 	timeout time.Duration,
+	hintPorts ...int,
 ) (Result, error) {
 	result := Result{
-		IP:        target,
-		Method:    "tcp-connect",
-		Timestamp: time.Now(),
+		IP:     target,
+		Method: "tcp-connect",
 	}
 
-	for _, port := range []int{80, 443} {
+	probePorts := buildFallbackPorts(hintPorts)
+
+	for _, port := range probePorts {
 		if err := ctx.Err(); err != nil {
 			result.Reason = "context-canceled"
 			return result, err
@@ -174,6 +175,41 @@ func DiscoverHostTCP(
 
 	result.Reason = "no-response"
 	return result, nil
+}
+
+func buildFallbackPorts(hintPorts []int) []int {
+	const maxFallbackPorts = 4
+
+	defaults := []int{80, 443, 22}
+	seen := make(map[int]struct{}, maxFallbackPorts)
+	ports := make([]int, 0, maxFallbackPorts)
+
+	for _, port := range hintPorts {
+		if port < 1 || port > 65535 {
+			continue
+		}
+		if _, exists := seen[port]; exists {
+			continue
+		}
+		seen[port] = struct{}{}
+		ports = append(ports, port)
+		if len(ports) == 2 {
+			break
+		}
+	}
+
+	for _, port := range defaults {
+		if len(ports) >= maxFallbackPorts {
+			break
+		}
+		if _, exists := seen[port]; exists {
+			continue
+		}
+		seen[port] = struct{}{}
+		ports = append(ports, port)
+	}
+
+	return ports
 }
 
 func isConnectionRefused(err error) bool {

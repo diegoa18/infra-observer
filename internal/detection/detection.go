@@ -86,7 +86,7 @@ func GrabBanner(
 	port int,
 	timeout time.Duration,
 ) string {
-	if !supportsPassiveBanner(port) {
+	if !SupportsPassiveBanner(port) {
 		return ""
 	}
 
@@ -110,7 +110,7 @@ func GrabBanner(
 	)
 }
 
-func supportsPassiveBanner(port int) bool {
+func SupportsPassiveBanner(port int) bool {
 	switch port {
 	case 21, 22, 25, 110, 143:
 		return true

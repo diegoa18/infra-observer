@@ -72,3 +72,31 @@ func TestScanPortClosed(t *testing.T) {
 		)
 	}
 }
+
+func TestScanPortUnknownOnCanceledContext(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	results := ScanPorts(
+		ctx,
+		"127.0.0.1",
+		[]int{22, 80, 443},
+		time.Second,
+		2,
+	)
+
+	if len(results) != 3 {
+		t.Fatalf("got %d results, want 3", len(results))
+	}
+
+	for i, result := range results {
+		if result.State != PortUnknown {
+			t.Fatalf(
+				"results[%d].State = %q, want %q",
+				i,
+				result.State,
+				PortUnknown,
+			)
+		}
+	}
+}

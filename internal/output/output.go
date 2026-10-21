@@ -29,6 +29,13 @@ func PrintObservations(observations []domain.Observation) {
 			observation.Asset.IP,
 		)
 
+		if observation.Asset.Hostname != "" {
+			fmt.Printf(
+				"Hostname: %s\n",
+				observation.Asset.Hostname,
+			)
+		}
+
 		fmt.Printf(
 			"Discovery: %s (%s)\n",
 			observation.Discovery.Method,

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"strings"
+	"sync"
 	"time"
 
 	"infra-observer/internal/detection"
@@ -11,6 +13,8 @@ import (
 	"infra-observer/internal/domain"
 	"infra-observer/internal/scanner"
 )
+
+const maxConcurrentHosts = 16
 
 type ScanOptions struct {
 	Ports       []int
@@ -24,6 +28,12 @@ type ScanService struct{}
 
 func NewScanService() *ScanService {
 	return &ScanService{}
+}
+
+type targetScanOutcome struct {
+	observation domain.Observation
+	alive       bool
+	err         error
 }
 
 func (s *ScanService) Scan(
@@ -47,83 +57,165 @@ func (s *ScanService) Scan(
 		opts.Concurrency = 100
 	}
 
+	hostWorkers := len(targets)
+	if hostWorkers > maxConcurrentHosts {
+		hostWorkers = maxConcurrentHosts
+	}
+
+	outcomes := make([]targetScanOutcome, len(targets))
+	jobs := make(chan int)
+
+	var wg sync.WaitGroup
+
+	for worker := 0; worker < hostWorkers; worker++ {
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+
+			for index := range jobs {
+				if ctx.Err() != nil {
+					return
+				}
+
+				obs, alive, err := s.scanTarget(
+					ctx,
+					targets[index],
+					opts,
+				)
+
+				outcomes[index] = targetScanOutcome{
+					observation: obs,
+					alive:       alive,
+					err:         err,
+				}
+			}
+		}()
+	}
+
+dispatch:
+	for index := range targets {
+		select {
+		case <-ctx.Done():
+			break dispatch
+		case jobs <- index:
+		}
+	}
+
+	close(jobs)
+	wg.Wait()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	var observations []domain.Observation
 
-	for _, target := range targets {
-		if err := ctx.Err(); err != nil {
-			return observations, err
-		}
-
-		discoveryResult, err := s.discover(
-			ctx,
-			target,
-			opts,
-		)
-		if err != nil {
-			return observations, fmt.Errorf(
-				"discover %s: %w",
-				target,
-				err,
-			)
-		}
-
-		if !discoveryResult.Alive {
+	for index, outcome := range outcomes {
+		if outcome.err != nil {
+			if len(targets) == 1 {
+				return nil, fmt.Errorf(
+					"discover %s: %w",
+					targets[index],
+					outcome.err,
+				)
+			}
 			continue
 		}
 
-		portResults := scanner.ScanPorts(
-			ctx,
-			target,
-			opts.Ports,
-			opts.Timeout,
-			opts.Concurrency,
-		)
-
-		portObservations := make(
-			[]domain.PortObservation,
-			0,
-			len(portResults),
-		)
-
-		for _, result := range portResults {
-			portObservations = append(
-				portObservations,
-				domain.PortObservation{
-					Port:     result.Port,
-					Protocol: "tcp",
-					State:    string(result.State),
-				},
-			)
-		}
-
-		services := detectServices(
-			ctx,
-			target,
-			portResults,
-			opts,
-		)
-
-		observation := domain.Observation{
-			ObservedAt: time.Now(),
-			Asset: domain.Asset{
-				IP: target,
-			},
-			Discovery: domain.DiscoveryEvidence{
-				Method: discoveryResult.Method,
-				RTT:    discoveryResult.RTT,
-				Reason: discoveryResult.Reason,
-			},
-			Ports:    portObservations,
-			Services: services,
+		if !outcome.alive {
+			continue
 		}
 
 		observations = append(
 			observations,
-			observation,
+			outcome.observation,
 		)
 	}
 
 	return observations, nil
+}
+
+func (s *ScanService) scanTarget(
+	ctx context.Context,
+	target string,
+	opts ScanOptions,
+) (domain.Observation, bool, error) {
+	discoveryResult, err := s.discover(
+		ctx,
+		target,
+		opts,
+	)
+	if err != nil {
+		return domain.Observation{}, false, err
+	}
+
+	if !discoveryResult.Alive {
+		return domain.Observation{}, false, nil
+	}
+
+	portResults := scanner.ScanPorts(
+		ctx,
+		target,
+		opts.Ports,
+		opts.Timeout,
+		opts.Concurrency,
+	)
+
+	if err := ctx.Err(); err != nil {
+		return domain.Observation{}, false, err
+	}
+
+	portObservations := make(
+		[]domain.PortObservation,
+		0,
+		len(portResults),
+	)
+
+	for _, result := range portResults {
+		portObservations = append(
+			portObservations,
+			domain.PortObservation{
+				Port:     result.Port,
+				Protocol: "tcp",
+				State:    string(result.State),
+			},
+		)
+	}
+
+	services := detectServices(
+		ctx,
+		target,
+		portResults,
+		opts,
+	)
+
+	if err := ctx.Err(); err != nil {
+		return domain.Observation{}, false, err
+	}
+
+	hostname := resolveHostname(
+		ctx,
+		target,
+		opts.Timeout,
+	)
+
+	observation := domain.Observation{
+		ObservedAt: time.Now(),
+		Asset: domain.Asset{
+			IP:       target,
+			Hostname: hostname,
+		},
+		Discovery: domain.DiscoveryEvidence{
+			Method: discoveryResult.Method,
+			RTT:    discoveryResult.RTT,
+			Reason: discoveryResult.Reason,
+		},
+		Ports:    portObservations,
+		Services: services,
+	}
+
+	return observation, true, nil
 }
 
 func (s *ScanService) discover(
@@ -133,11 +225,10 @@ func (s *ScanService) discover(
 ) (discovery.Result, error) {
 	if !opts.Discovery {
 		return discovery.Result{
-			IP:        target,
-			Alive:     true,
-			Method:    "skipped",
-			Reason:    "discovery-disabled",
-			Timestamp: time.Now(),
+			IP:     target,
+			Alive:  true,
+			Method: "skipped",
+			Reason: "discovery-disabled",
 		}, nil
 	}
 
@@ -159,6 +250,7 @@ func (s *ScanService) discover(
 		ctx,
 		target,
 		opts.Timeout,
+		opts.Ports...,
 	)
 
 	if tcpErr == nil && tcpResult.Alive {
@@ -178,6 +270,31 @@ func (s *ScanService) discover(
 	}
 
 	return tcpResult, nil
+}
+
+func resolveHostname(
+	ctx context.Context,
+	ip string,
+	timeout time.Duration,
+) string {
+	lookupCtx, cancel := context.WithTimeout(
+		ctx,
+		timeout,
+	)
+	defer cancel()
+
+	names, err := net.DefaultResolver.LookupAddr(
+		lookupCtx,
+		ip,
+	)
+	if err != nil || len(names) == 0 {
+		return ""
+	}
+
+	return strings.TrimSuffix(
+		names[0],
+		".",
+	)
 }
 
 func detectServices(
@@ -265,6 +382,10 @@ func grabPassiveBanner(
 	port int,
 	timeout time.Duration,
 ) string {
+	if !detection.SupportsPassiveBanner(port) {
+		return ""
+	}
+
 	if ctx.Err() != nil {
 		return ""
 	}

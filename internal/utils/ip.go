@@ -107,12 +107,3 @@ func expandIPv4Network(network *net.IPNet) ([]string, error) {
 
 	return targets, nil
 }
-
-func incrementIPv4(ip net.IP) {
-	for i := len(ip) - 1; i >= 0; i-- {
-		ip[i]++
-		if ip[i] != 0 {
-			return
-		}
-	}
-}
