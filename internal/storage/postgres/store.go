@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"infra-observer/internal/domain"
+	"infra-observer/migrations"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -44,9 +45,48 @@ func Open(
 		)
 	}
 
-	return &Store{
+	store := &Store{
 		pool: pool,
-	}, nil
+	}
+
+	if err := store.ensureMigrations(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+
+	return store, nil
+}
+
+func (s *Store) ensureMigrations(ctx context.Context) error {
+	var exists bool
+	err := s.pool.QueryRow(
+		ctx,
+		`
+		SELECT EXISTS (
+			SELECT FROM information_schema.tables
+			WHERE table_schema = 'public'
+			AND table_name = 'assets'
+		)
+		`,
+	).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("check schema migration status: %w", err)
+	}
+
+	if exists {
+		return nil
+	}
+
+	migrationSQL, err := migrations.FS.ReadFile("001_initial.sql")
+	if err != nil {
+		return fmt.Errorf("read embedded migration: %w", err)
+	}
+
+	if _, err := s.pool.Exec(ctx, string(migrationSQL)); err != nil {
+		return fmt.Errorf("execute embedded migration: %w", err)
+	}
+
+	return nil
 }
 
 func (s *Store) Close() {

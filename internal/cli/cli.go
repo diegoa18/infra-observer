@@ -16,7 +16,7 @@ import (
 	"infra-observer/internal/utils"
 )
 
-const version = "0.1.0"
+const version = "1.0.0"
 
 func Execute(args []string) error {
 	if len(args) == 0 {
@@ -67,13 +67,13 @@ func printUsage() {
 		"  infra-observer scan [flags] <target>",
 	)
 	fmt.Println(
-		"  infra-observer inventory [target]",
+		"  infra-observer inventory [flags] [target]",
 	)
 	fmt.Println(
 		"  infra-observer history [flags] <target>",
 	)
 	fmt.Println(
-		"  infra-observer changes <target>",
+		"  infra-observer changes [flags] <target>",
 	)
 	fmt.Println()
 
@@ -98,6 +98,12 @@ func printUsage() {
 	)
 	fmt.Println()
 
+	fmt.Println("Global Flags:")
+	fmt.Println(
+		"  -json               Output results in structured JSON format",
+	)
+	fmt.Println()
+
 	fmt.Println("Scan flags:")
 	fmt.Println(
 		"  -p <ports>          Ports to scan",
@@ -112,7 +118,7 @@ func printUsage() {
 		"  -no-discovery       Skip host discovery",
 	)
 	fmt.Println(
-		"  -probe              Enable HTTP/HTTPS probing",
+		"  -probe              Enable HTTP/HTTPS and TLS probing",
 	)
 	fmt.Println(
 		"  -store              Store observations in PostgreSQL",
@@ -158,13 +164,19 @@ func handleScan(args []string) error {
 	probe := cmd.Bool(
 		"probe",
 		false,
-		"Enable HTTP/HTTPS probing",
+		"Enable HTTP/HTTPS and TLS probing",
 	)
 
 	storeObservations := cmd.Bool(
 		"store",
 		false,
 		"Store observations in PostgreSQL",
+	)
+
+	asJSON := cmd.Bool(
+		"json",
+		false,
+		"Output results in JSON format",
 	)
 
 	cmd.SetOutput(os.Stderr)
@@ -247,9 +259,9 @@ func handleScan(args []string) error {
 		}
 	}
 
-	output.PrintObservations(observations)
+	output.PrintObservations(observations, *asJSON)
 
-	if databaseStore != nil {
+	if databaseStore != nil && !*asJSON {
 		fmt.Printf(
 			"Stored %d observation(s).\n",
 			len(observations),
@@ -263,6 +275,12 @@ func handleInventory(args []string) error {
 	cmd := flag.NewFlagSet(
 		"inventory",
 		flag.ContinueOnError,
+	)
+
+	asJSON := cmd.Bool(
+		"json",
+		false,
+		"Output results in JSON format",
 	)
 
 	cmd.SetOutput(os.Stderr)
@@ -314,7 +332,7 @@ func handleInventory(args []string) error {
 		return err
 	}
 
-	output.PrintInventory(inventory)
+	output.PrintInventory(inventory, *asJSON)
 
 	return nil
 }
@@ -329,6 +347,12 @@ func handleHistory(args []string) error {
 		"limit",
 		10,
 		"Maximum observations to show",
+	)
+
+	asJSON := cmd.Bool(
+		"json",
+		false,
+		"Output results in JSON format",
 	)
 
 	cmd.SetOutput(os.Stderr)
@@ -386,6 +410,7 @@ func handleHistory(args []string) error {
 		output.PrintHistory(
 			target,
 			observations,
+			*asJSON,
 		)
 	}
 
@@ -396,6 +421,12 @@ func handleChanges(args []string) error {
 	cmd := flag.NewFlagSet(
 		"changes",
 		flag.ContinueOnError,
+	)
+
+	asJSON := cmd.Bool(
+		"json",
+		false,
+		"Output results in JSON format",
 	)
 
 	cmd.SetOutput(os.Stderr)
@@ -457,7 +488,7 @@ func handleChanges(args []string) error {
 			observations[1],
 		)
 
-		output.PrintChanges(result)
+		output.PrintChanges(result, *asJSON)
 	}
 
 	return nil
