@@ -28,31 +28,12 @@ func (s *Store) Inventory(
 	if len(ips) == 0 {
 		rows, err = s.pool.Query(
 			ctx,
-			`
-			SELECT
-				id,
-				host(ip),
-				COALESCE(hostname, ''),
-				first_seen,
-				last_seen
-			FROM assets
-			ORDER BY ip
-			`,
+			selectAllInventoryAssetsSQL,
 		)
 	} else {
 		rows, err = s.pool.Query(
 			ctx,
-			`
-			SELECT
-				id,
-				host(ip),
-				COALESCE(hostname, ''),
-				first_seen,
-				last_seen
-			FROM assets
-			WHERE host(ip) = ANY($1::text[])
-			ORDER BY ip
-			`,
+			selectFilteredInventoryAssetsSQL,
 			ips,
 		)
 	}
@@ -101,14 +82,25 @@ func (s *Store) Inventory(
 
 	rows.Close()
 
-	for i := range stored {
-		if err := s.loadInventoryPorts(
-			ctx,
-			stored[i].id,
-			&stored[i].asset,
-		); err != nil {
-			return nil, err
-		}
+	if len(stored) == 0 {
+		return nil, nil
+	}
+
+	assetIDs := make([]int64, len(stored))
+	indexByAssetID := make(map[int64]int, len(stored))
+
+	for i, item := range stored {
+		assetIDs[i] = item.id
+		indexByAssetID[item.id] = i
+	}
+
+	if err := s.loadInventoryPortsBulk(
+		ctx,
+		assetIDs,
+		indexByAssetID,
+		stored,
+	); err != nil {
+		return nil, err
 	}
 
 	inventory := make(
@@ -123,65 +115,27 @@ func (s *Store) Inventory(
 	return inventory, nil
 }
 
-func (s *Store) loadInventoryPorts(
+func (s *Store) loadInventoryPortsBulk(
 	ctx context.Context,
-	assetID int64,
-	asset *domain.InventoryAsset,
+	assetIDs []int64,
+	indexByAssetID map[int64]int,
+	stored []storedInventoryAsset,
 ) error {
 	rows, err := s.pool.Query(
 		ctx,
-		`
-		SELECT DISTINCT ON (
-			po.protocol,
-			po.port
-		)
-			po.port,
-			po.protocol,
-			po.state,
-			o.observed_at,
-			COALESCE(s.name, ''),
-			COALESCE(s.state, ''),
-			COALESCE(s.banner, ''),
-			COALESCE(
-				s.metadata,
-				'{}'::jsonb
-			)
-		FROM port_observations po
-		JOIN observations o
-			ON o.id = po.observation_id
-		LEFT JOIN LATERAL (
-			SELECT
-				svc.name,
-				svc.state,
-				svc.banner,
-				svc.metadata
-			FROM services svc
-			WHERE
-				svc.observation_id = o.id
-				AND svc.port = po.port
-				AND svc.protocol = po.protocol
-			ORDER BY svc.id
-			LIMIT 1
-		) s ON TRUE
-		WHERE o.asset_id = $1
-		ORDER BY
-			po.protocol,
-			po.port,
-			o.observed_at DESC,
-			o.id DESC
-		`,
-		assetID,
+		selectInventoryPortsByAssetsSQL,
+		assetIDs,
 	)
 	if err != nil {
 		return fmt.Errorf(
-			"query inventory ports for asset %d: %w",
-			assetID,
+			"query bulk inventory ports: %w",
 			err,
 		)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
+		var assetID int64
 		var port domain.InventoryPort
 
 		var serviceName string
@@ -190,6 +144,7 @@ func (s *Store) loadInventoryPorts(
 		var metadataJSON []byte
 
 		if err := rows.Scan(
+			&assetID,
 			&port.Port,
 			&port.Protocol,
 			&port.State,
@@ -237,33 +192,34 @@ func (s *Store) loadInventoryPorts(
 			}
 		}
 
-		asset.Ports = append(
-			asset.Ports,
-			port,
-		)
+		if idx, exists := indexByAssetID[assetID]; exists {
+			stored[idx].asset.Ports = append(
+				stored[idx].asset.Ports,
+				port,
+			)
+		}
 	}
 
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf(
-			"iterate inventory ports for asset %d: %w",
-			assetID,
+			"iterate bulk inventory ports: %w",
 			err,
 		)
 	}
 
-	sort.Slice(
-		asset.Ports,
-		func(i, j int) bool {
-			if asset.Ports[i].Port ==
-				asset.Ports[j].Port {
-				return asset.Ports[i].Protocol <
-					asset.Ports[j].Protocol
-			}
+	for i := range stored {
+		ports := stored[i].asset.Ports
+		sort.Slice(
+			ports,
+			func(a, b int) bool {
+				if ports[a].Port == ports[b].Port {
+					return ports[a].Protocol < ports[b].Protocol
+				}
 
-			return asset.Ports[i].Port <
-				asset.Ports[j].Port
-		},
-	)
+				return ports[a].Port < ports[b].Port
+			},
+		)
+	}
 
 	return nil
 }

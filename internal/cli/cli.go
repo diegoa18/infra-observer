@@ -11,6 +11,7 @@ import (
 
 	"infra-observer/internal/application"
 	"infra-observer/internal/change"
+	"infra-observer/internal/domain"
 	"infra-observer/internal/output"
 	"infra-observer/internal/storage/postgres"
 	"infra-observer/internal/utils"
@@ -226,7 +227,7 @@ func handleScan(args []string) error {
 	)
 	defer stop()
 
-	var databaseStore *postgres.Store
+	var databaseStore domain.Repository
 
 	if *storeObservations {
 		databaseStore, err = openDatabase(ctx)
@@ -496,7 +497,7 @@ func handleChanges(args []string) error {
 
 func openDatabase(
 	ctx context.Context,
-) (*postgres.Store, error) {
+) (domain.Repository, error) {
 	databaseURL := os.Getenv(
 		"DATABASE_URL",
 	)

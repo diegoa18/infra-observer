@@ -13,8 +13,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+var _ domain.Repository = (*Store)(nil)
+
 type Store struct {
 	pool *pgxpool.Pool
+}
+
+type storedObservation struct {
+	id          int64
+	observation domain.Observation
 }
 
 func Open(
@@ -59,17 +66,7 @@ func Open(
 
 func (s *Store) ensureMigrations(ctx context.Context) error {
 	var exists bool
-	err := s.pool.QueryRow(
-		ctx,
-		`
-		SELECT EXISTS (
-			SELECT FROM information_schema.tables
-			WHERE table_schema = 'public'
-			AND table_name = 'assets'
-		)
-		`,
-	).Scan(&exists)
-	if err != nil {
+	if err := s.pool.QueryRow(ctx, checkAssetsTableExistsSQL).Scan(&exists); err != nil {
 		return fmt.Errorf("check schema migration status: %w", err)
 	}
 
@@ -120,31 +117,7 @@ func (s *Store) SaveObservation(
 
 	err = tx.QueryRow(
 		ctx,
-		`
-		INSERT INTO assets (
-			ip,
-			hostname,
-			first_seen,
-			last_seen
-		)
-		VALUES (
-			$1,
-			NULLIF($2, ''),
-			$3,
-			$3
-		)
-		ON CONFLICT (ip)
-		DO UPDATE SET
-			hostname = COALESCE(
-				NULLIF(EXCLUDED.hostname, ''),
-				assets.hostname
-			),
-			last_seen = GREATEST(
-				assets.last_seen,
-				EXCLUDED.last_seen
-			)
-		RETURNING id
-		`,
+		upsertAssetSQL,
 		observation.Asset.IP,
 		observation.Asset.Hostname,
 		observation.ObservedAt,
@@ -161,23 +134,7 @@ func (s *Store) SaveObservation(
 
 	err = tx.QueryRow(
 		ctx,
-		`
-		INSERT INTO observations (
-			asset_id,
-			observed_at,
-			discovery_method,
-			discovery_rtt_ns,
-			discovery_reason
-		)
-		VALUES (
-			$1,
-			$2,
-			$3,
-			$4,
-			$5
-		)
-		RETURNING id
-		`,
+		insertObservationSQL,
 		assetID,
 		observation.ObservedAt,
 		observation.Discovery.Method,
@@ -192,90 +149,63 @@ func (s *Store) SaveObservation(
 		)
 	}
 
-	for _, port := range observation.Ports {
-		_, err := tx.Exec(
-			ctx,
-			`
-			INSERT INTO port_observations (
-				observation_id,
-				port,
-				protocol,
-				state
-			)
-			VALUES (
-				$1,
-				$2,
-				$3,
-				$4
-			)
-			`,
-			observationID,
-			port.Port,
-			port.Protocol,
-			port.State,
-		)
-		if err != nil {
-			return fmt.Errorf(
-				"insert port %d/%s for %s: %w",
+	totalBatchItems := len(observation.Ports) + len(observation.Services)
+	if totalBatchItems > 0 {
+		batch := &pgx.Batch{}
+
+		for _, port := range observation.Ports {
+			batch.Queue(
+				insertPortObservationSQL,
+				observationID,
 				port.Port,
 				port.Protocol,
-				observation.Asset.IP,
-				err,
+				port.State,
 			)
 		}
-	}
 
-	for _, service := range observation.Services {
-		metadata := service.Metadata
-		if metadata == nil {
-			metadata = map[string]string{}
-		}
+		for _, service := range observation.Services {
+			metadata := service.Metadata
+			if metadata == nil {
+				metadata = map[string]string{}
+			}
 
-		metadataJSON, err := json.Marshal(metadata)
-		if err != nil {
-			return fmt.Errorf(
-				"encode metadata for port %d/%s: %w",
+			metadataJSON, err := json.Marshal(metadata)
+			if err != nil {
+				return fmt.Errorf(
+					"encode metadata for port %d/%s: %w",
+					service.Port,
+					service.Protocol,
+					err,
+				)
+			}
+
+			batch.Queue(
+				insertServiceSQL,
+				observationID,
 				service.Port,
 				service.Protocol,
-				err,
+				service.Name,
+				string(service.State),
+				service.Banner,
+				string(metadataJSON),
 			)
 		}
 
-		_, err = tx.Exec(
-			ctx,
-			`
-			INSERT INTO services (
-				observation_id,
-				port,
-				protocol,
-				name,
-				state,
-				banner,
-				metadata
-			)
-			VALUES (
-				$1,
-				$2,
-				$3,
-				$4,
-				$5,
-				$6,
-				$7::jsonb
-			)
-			`,
-			observationID,
-			service.Port,
-			service.Protocol,
-			service.Name,
-			string(service.State),
-			service.Banner,
-			string(metadataJSON),
-		)
-		if err != nil {
+		br := tx.SendBatch(ctx, batch)
+		for i := 0; i < totalBatchItems; i++ {
+			if _, err := br.Exec(); err != nil {
+				_ = br.Close()
+				return fmt.Errorf(
+					"batch insert observation details for %s: %w",
+					observation.Asset.IP,
+					err,
+				)
+			}
+		}
+
+		if err := br.Close(); err != nil {
 			return fmt.Errorf(
-				"insert service %d/%s for %s: %w",
-				service.Port,
-				service.Protocol,
+				"close batch for %s: %w",
 				observation.Asset.IP,
 				err,
 			)
@@ -306,24 +236,7 @@ func (s *Store) LatestObservations(
 
 	rows, err := s.pool.Query(
 		ctx,
-		`
-		SELECT
-			o.id,
-			host(a.ip),
-			COALESCE(a.hostname, ''),
-			o.observed_at,
-			o.discovery_method,
-			o.discovery_rtt_ns,
-			o.discovery_reason
-		FROM observations o
-		JOIN assets a
-			ON a.id = o.asset_id
-		WHERE a.ip = $1::inet
-		ORDER BY
-			o.observed_at DESC,
-			o.id DESC
-		LIMIT $2
-		`,
+		selectLatestObservationsSQL,
 		ip,
 		limit,
 	)
@@ -335,11 +248,6 @@ func (s *Store) LatestObservations(
 		)
 	}
 	defer rows.Close()
-
-	type storedObservation struct {
-		id          int64
-		observation domain.Observation
-	}
 
 	var stored []storedObservation
 
@@ -364,13 +272,8 @@ func (s *Store) LatestObservations(
 			)
 		}
 
-		item.observation.Discovery.RTT =
-			timeDuration(discoveryRTT)
-
-		stored = append(
-			stored,
-			item,
-		)
+		item.observation.Discovery.RTT = timeDuration(discoveryRTT)
+		stored = append(stored, item)
 	}
 
 	if err := rows.Err(); err != nil {
@@ -381,22 +284,26 @@ func (s *Store) LatestObservations(
 		)
 	}
 
-	for i := range stored {
-		if err := s.loadPorts(
-			ctx,
-			stored[i].id,
-			&stored[i].observation,
-		); err != nil {
-			return nil, err
-		}
+	rows.Close()
 
-		if err := s.loadServices(
-			ctx,
-			stored[i].id,
-			&stored[i].observation,
-		); err != nil {
-			return nil, err
-		}
+	if len(stored) == 0 {
+		return nil, nil
+	}
+
+	obsIDs := make([]int64, len(stored))
+	indexByObsID := make(map[int64]int, len(stored))
+
+	for i, item := range stored {
+		obsIDs[i] = item.id
+		indexByObsID[item.id] = i
+	}
+
+	if err := s.loadPortsBulk(ctx, obsIDs, indexByObsID, stored); err != nil {
+		return nil, err
+	}
+
+	if err := s.loadServicesBulk(ctx, obsIDs, indexByObsID, stored); err != nil {
+		return nil, err
 	}
 
 	observations := make(
@@ -405,113 +312,80 @@ func (s *Store) LatestObservations(
 	)
 
 	for i := range stored {
-		observations[len(stored)-1-i] =
-			stored[i].observation
+		observations[len(stored)-1-i] = stored[i].observation
 	}
 
 	return observations, nil
 }
 
-func (s *Store) loadPorts(
+func (s *Store) loadPortsBulk(
 	ctx context.Context,
-	observationID int64,
-	observation *domain.Observation,
+	obsIDs []int64,
+	indexByObsID map[int64]int,
+	stored []storedObservation,
 ) error {
 	rows, err := s.pool.Query(
 		ctx,
-		`
-		SELECT
-			port,
-			protocol,
-			state
-		FROM port_observations
-		WHERE observation_id = $1
-		ORDER BY
-			port,
-			protocol
-		`,
-		observationID,
+		selectPortsByObservationsSQL,
+		obsIDs,
 	)
 	if err != nil {
-		return fmt.Errorf(
-			"query ports for observation %d: %w",
-			observationID,
-			err,
-		)
+		return fmt.Errorf("query bulk ports: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
+		var obsID int64
 		var port domain.PortObservation
 
 		if err := rows.Scan(
+			&obsID,
 			&port.Port,
 			&port.Protocol,
 			&port.State,
 		); err != nil {
-			return fmt.Errorf(
-				"scan port for observation %d: %w",
-				observationID,
-				err,
-			)
+			return fmt.Errorf("scan port observation: %w", err)
 		}
 
-		observation.Ports = append(
-			observation.Ports,
-			port,
-		)
+		if idx, exists := indexByObsID[obsID]; exists {
+			stored[idx].observation.Ports = append(
+				stored[idx].observation.Ports,
+				port,
+			)
+		}
 	}
 
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf(
-			"iterate ports for observation %d: %w",
-			observationID,
-			err,
-		)
+		return fmt.Errorf("iterate bulk ports: %w", err)
 	}
 
 	return nil
 }
 
-func (s *Store) loadServices(
+func (s *Store) loadServicesBulk(
 	ctx context.Context,
-	observationID int64,
-	observation *domain.Observation,
+	obsIDs []int64,
+	indexByObsID map[int64]int,
+	stored []storedObservation,
 ) error {
 	rows, err := s.pool.Query(
 		ctx,
-		`
-		SELECT
-			port,
-			protocol,
-			name,
-			state,
-			banner,
-			metadata
-		FROM services
-		WHERE observation_id = $1
-		ORDER BY
-			port,
-			protocol,
-			name
-		`,
-		observationID,
+		selectServicesByObservationsSQL,
+		obsIDs,
 	)
 	if err != nil {
-		return fmt.Errorf(
-			"query services for observation %d: %w",
-			observationID,
-			err,
-		)
+		return fmt.Errorf("query bulk services: %w", err)
 	}
 	defer rows.Close()
 
 	for rows.Next() {
+		var obsID int64
 		var service domain.Service
 		var state string
 		var metadataJSON []byte
 
 		if err := rows.Scan(
+			&obsID,
 			&service.Port,
 			&service.Protocol,
 			&service.Name,
@@ -519,18 +393,11 @@ func (s *Store) loadServices(
 			&service.Banner,
 			&metadataJSON,
 		); err != nil {
-			return fmt.Errorf(
-				"scan service for observation %d: %w",
-				observationID,
-				err,
-			)
+			return fmt.Errorf("scan service observation: %w", err)
 		}
 
 		service.State = domain.ServiceState(state)
-
-		service.Metadata = make(
-			map[string]string,
-		)
+		service.Metadata = make(map[string]string)
 
 		if len(metadataJSON) > 0 {
 			if err := json.Unmarshal(
@@ -539,24 +406,22 @@ func (s *Store) loadServices(
 			); err != nil {
 				return fmt.Errorf(
 					"decode service metadata for observation %d: %w",
-					observationID,
+					obsID,
 					err,
 				)
 			}
 		}
 
-		observation.Services = append(
-			observation.Services,
-			service,
-		)
+		if idx, exists := indexByObsID[obsID]; exists {
+			stored[idx].observation.Services = append(
+				stored[idx].observation.Services,
+				service,
+			)
+		}
 	}
 
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf(
-			"iterate services for observation %d: %w",
-			observationID,
-			err,
-		)
+		return fmt.Errorf("iterate bulk services: %w", err)
 	}
 
 	return nil
