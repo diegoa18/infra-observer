@@ -73,6 +73,8 @@ func printUsage() {
 	fmt.Println("  -no-discovery       Skip host discovery")
 	fmt.Println("  -probe              Enable HTTP/HTTPS and TLS probing")
 	fmt.Println("  -store              Store observations in PostgreSQL")
+	fmt.Println("  -diff               Show changes immediately after storing (requires -store)")
+	fmt.Println("  -audit              Exit with code 2 if network drift is detected (requires -diff)")
 	fmt.Println()
 	fmt.Println("History flags:")
 	fmt.Println("  -limit <n>          Maximum observations to show")
@@ -113,9 +115,11 @@ func handleScan(args []string) error {
 	probe := cmd.Bool("probe", false, "Enable HTTP/HTTPS and TLS probing")
 	storeObservations := cmd.Bool("store", false, "Store observations in PostgreSQL")
 	asJSON := cmd.Bool("json", false, "Output results in JSON format")
+	diff := cmd.Bool("diff", false, "Show changes after store")
+	audit := cmd.Bool("audit", false, "Exit code 2 on changes")
 
 	cmd.SetOutput(os.Stderr)
-	args = prepareArgs(args, []string{"no-discovery", "probe", "store", "json"})
+	args = prepareArgs(args, []string{"no-discovery", "probe", "store", "json", "diff", "audit"})
 
 	if err := cmd.Parse(args); err != nil {
 		return err
@@ -171,6 +175,26 @@ func handleScan(args []string) error {
 	output.PrintObservations(observations, *asJSON)
 	if databaseStore != nil && !*asJSON {
 		fmt.Printf("Stored %d observation(s).\n", len(observations))
+	}
+
+	var hasDrift bool
+	if databaseStore != nil && *diff {
+		for _, obs := range observations {
+			history, err := databaseStore.LatestObservations(ctx, obs.Asset.IP, 2)
+			if err == nil && len(history) == 2 {
+				res := change.Compare(history[0], history[1])
+				if !res.Empty() {
+					hasDrift = true
+					if !*asJSON {
+						output.PrintChanges(res, false)
+					}
+				}
+			}
+		}
+	}
+
+	if *audit && hasDrift {
+		os.Exit(2)
 	}
 
 	return nil

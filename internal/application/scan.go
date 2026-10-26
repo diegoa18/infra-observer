@@ -274,6 +274,9 @@ func detectServices(
 					if tlsResult.Version != "" {
 						service.Metadata["tls_version"] = tlsResult.Version
 					}
+					if tlsResult.CipherSuite != "" {
+						service.Metadata["tls_cipher_suite"] = tlsResult.CipherSuite
+					}
 					if tlsResult.Subject != "" {
 						service.Metadata["tls_subject"] = tlsResult.Subject
 					}
@@ -286,6 +289,9 @@ func detectServices(
 					if tlsResult.NotAfter != "" {
 						service.Metadata["tls_not_after"] = tlsResult.NotAfter
 					}
+					service.Metadata["tls_self_signed"] = fmt.Sprintf("%t", tlsResult.SelfSigned)
+					service.Metadata["tls_expired"] = fmt.Sprintf("%t", tlsResult.Expired)
+					service.Metadata["tls_days_left"] = fmt.Sprintf("%d", tlsResult.DaysLeft)
 				}
 			}
 		}

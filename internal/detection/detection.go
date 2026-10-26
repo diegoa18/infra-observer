@@ -23,11 +23,15 @@ type HTTPProbeResult struct {
 }
 
 type TLSProbeResult struct {
-	Version  string
-	Subject  string
-	Issuer   string
-	SANs     string
-	NotAfter string
+	Version     string
+	CipherSuite string
+	Subject     string
+	Issuer      string
+	SANs        string
+	NotAfter    string
+	Expired     bool
+	DaysLeft    int
+	SelfSigned  bool
 }
 
 var commonPorts = map[int]string{
@@ -228,7 +232,8 @@ func ProbeTLS(
 
 	state := conn.ConnectionState()
 	result := TLSProbeResult{
-		Version: tlsVersionName(state.Version),
+		Version:     tlsVersionName(state.Version),
+		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
 	}
 
 	if len(state.PeerCertificates) > 0 {
@@ -244,7 +249,13 @@ func ProbeTLS(
 		if len(cert.DNSNames) > 0 {
 			result.SANs = strings.Join(cert.DNSNames, ",")
 		}
+
 		result.NotAfter = cert.NotAfter.UTC().Format(time.RFC3339)
+		result.SelfSigned = cert.Issuer.String() == cert.Subject.String()
+
+		timeNow := time.Now()
+		result.Expired = timeNow.After(cert.NotAfter)
+		result.DaysLeft = int(cert.NotAfter.Sub(timeNow).Hours() / 24)
 	}
 
 	return result, nil
