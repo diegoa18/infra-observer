@@ -193,7 +193,7 @@ func TestProbeTLSAndHTTPSWithSelfSignedCert(t *testing.T) {
 		t.Fatalf("strconv.Atoi() error = %v", err)
 	}
 
-	tlsResult, err := ProbeTLS(context.Background(), host, port, time.Second)
+	tlsResult, err := ProbeTLS(context.Background(), host, host, port, time.Second)
 	if err != nil {
 		t.Fatalf("ProbeTLS() error = %v", err)
 	}
