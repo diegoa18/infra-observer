@@ -29,64 +29,38 @@ func ScanPorts(
 	target string,
 	ports []int,
 	timeout time.Duration,
-	concurrency int,
+	sem chan struct{},
 ) []PortResult {
 	if len(ports) == 0 {
 		return nil
 	}
 
-	if concurrency <= 0 {
-		concurrency = 100
-	}
-
-	if concurrency > len(ports) {
-		concurrency = len(ports)
-	}
-
 	results := make([]PortResult, len(ports))
-
-	jobs := make(chan int)
 	var wg sync.WaitGroup
 
-	for worker := 0; worker < concurrency; worker++ {
+	for i, p := range ports {
 		wg.Add(1)
 
-		go func() {
+		go func(index, port int) {
 			defer wg.Done()
 
-			for index := range jobs {
-				results[index] = scanPort(
-					ctx,
-					target,
-					ports[index],
-					timeout,
-				)
+			select {
+			case <-ctx.Done():
+				results[index] = PortResult{
+					Port:  port,
+					State: PortUnknown,
+					Error: ctx.Err(),
+				}
+				return
+			case sem <- struct{}{}:
 			}
-		}()
+
+			results[index] = scanPort(ctx, target, port, timeout)
+			<-sem
+		}(i, p)
 	}
 
-dispatch:
-	for index := range ports {
-		select {
-		case <-ctx.Done():
-			break dispatch
-		case jobs <- index:
-		}
-	}
-
-	close(jobs)
 	wg.Wait()
-
-	for index, result := range results {
-		if result.Port == 0 {
-			results[index] = PortResult{
-				Port:  ports[index],
-				State: PortUnknown,
-				Error: ctx.Err(),
-			}
-		}
-	}
-
 	return results
 }
 
@@ -101,38 +75,25 @@ func scanPort(
 		State: PortUnknown,
 	}
 
-	address := net.JoinHostPort(
-		target,
-		fmt.Sprintf("%d", port),
-	)
+	address := net.JoinHostPort(target, fmt.Sprintf("%d", port))
+	dialer := net.Dialer{Timeout: timeout}
 
-	dialer := net.Dialer{
-		Timeout: timeout,
-	}
-
-	conn, err := dialer.DialContext(
-		ctx,
-		"tcp",
-		address,
-	)
+	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		if ctx.Err() != nil {
 			result.Error = ctx.Err()
 			return result
 		}
-
 		if errors.Is(err, syscall.ECONNREFUSED) {
 			result.State = PortClosed
 			result.Error = err
 			return result
 		}
-
 		result.Error = err
 		return result
 	}
 
-	defer conn.Close()
-
+	conn.Close()
 	result.State = PortOpen
 	return result
 }

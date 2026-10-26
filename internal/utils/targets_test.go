@@ -11,7 +11,7 @@ func TestParseTargetIPv4(t *testing.T) {
 		t.Fatalf("ParseTarget() error = %v", err)
 	}
 
-	want := []string{"192.168.1.10"}
+	want := []TargetInfo{{IP: "192.168.1.10", Hostname: ""}}
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf(
@@ -28,11 +28,11 @@ func TestParseTargetCIDR(t *testing.T) {
 		t.Fatalf("ParseTarget() error = %v", err)
 	}
 
-	want := []string{
-		"192.168.1.0",
-		"192.168.1.1",
-		"192.168.1.2",
-		"192.168.1.3",
+	want := []TargetInfo{
+		{IP: "192.168.1.0", Hostname: ""},
+		{IP: "192.168.1.1", Hostname: ""},
+		{IP: "192.168.1.2", Hostname: ""},
+		{IP: "192.168.1.3", Hostname: ""},
 	}
 
 	if !reflect.DeepEqual(got, want) {

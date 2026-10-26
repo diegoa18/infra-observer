@@ -53,106 +53,53 @@ var commonPorts = map[int]string{
 func DetectService(port int, banner string) ServiceDetection {
 	if banner != "" {
 		lower := strings.ToLower(banner)
-
 		switch {
 		case strings.HasPrefix(lower, "ssh-"):
-			return ServiceDetection{
-				Name:   "SSH",
-				Method: "banner",
-			}
-
+			return ServiceDetection{Name: "SSH", Method: "banner"}
 		case strings.HasPrefix(lower, "220 "):
 			if strings.Contains(lower, "ftp") {
-				return ServiceDetection{
-					Name:   "FTP",
-					Method: "banner",
-				}
+				return ServiceDetection{Name: "FTP", Method: "banner"}
 			}
-
-			if strings.Contains(lower, "smtp") ||
-				strings.Contains(lower, "esmtp") ||
-				strings.Contains(lower, "mail") {
-				return ServiceDetection{
-					Name:   "SMTP",
-					Method: "banner",
-				}
+			if strings.Contains(lower, "smtp") || strings.Contains(lower, "esmtp") || strings.Contains(lower, "mail") {
+				return ServiceDetection{Name: "SMTP", Method: "banner"}
 			}
-
 		case strings.HasPrefix(lower, "+ok"):
-			return ServiceDetection{
-				Name:   "POP3",
-				Method: "banner",
-			}
-
+			return ServiceDetection{Name: "POP3", Method: "banner"}
 		case strings.HasPrefix(lower, "* ok"):
-			return ServiceDetection{
-				Name:   "IMAP",
-				Method: "banner",
-			}
-
-		case strings.Contains(lower, "mariadb") ||
-			strings.Contains(lower, "mysql"):
-			return ServiceDetection{
-				Name:   "MySQL",
-				Method: "banner",
-			}
-
-		case strings.HasPrefix(lower, "-err") ||
-			strings.HasPrefix(lower, "+pong") ||
-			strings.Contains(lower, "redis"):
-			return ServiceDetection{
-				Name:   "Redis",
-				Method: "banner",
-			}
+			return ServiceDetection{Name: "IMAP", Method: "banner"}
+		case strings.Contains(lower, "mariadb") || strings.Contains(lower, "mysql"):
+			return ServiceDetection{Name: "MySQL", Method: "banner"}
+		case strings.HasPrefix(lower, "-err") || strings.HasPrefix(lower, "+pong") || strings.Contains(lower, "redis"):
+			return ServiceDetection{Name: "Redis", Method: "banner"}
 		}
 	}
 
 	if service, ok := commonPorts[port]; ok {
-		return ServiceDetection{
-			Name:   service,
-			Method: "port",
-		}
+		return ServiceDetection{Name: service, Method: "port"}
 	}
-
-	return ServiceDetection{
-		Name:   "unknown",
-		Method: "none",
-	}
+	return ServiceDetection{Name: "unknown", Method: "none"}
 }
 
-func GrabBanner(
-	conn net.Conn,
-	port int,
-	timeout time.Duration,
-) string {
+func GrabBanner(conn net.Conn, port int, timeout time.Duration) string {
 	if !SupportsPassiveBanner(port) {
 		return ""
 	}
-
-	if err := conn.SetReadDeadline(
-		time.Now().Add(timeout),
-	); err != nil {
+	if err := conn.SetReadDeadline(time.Now().Add(timeout)); err != nil {
 		return ""
 	}
-
 	reader := bufio.NewReader(conn)
-
 	buffer := make([]byte, 1024)
-
 	n, err := reader.Read(buffer)
 	if err != nil {
 		return ""
 	}
-
 	return sanitizeBanner(buffer[:n])
 }
 
 func sanitizeBanner(raw []byte) string {
 	const maxBannerLength = 256
-
 	var b strings.Builder
 	b.Grow(len(raw))
-
 	lastWasSpace := false
 
 	for _, ch := range raw {
@@ -163,7 +110,6 @@ func sanitizeBanner(raw []byte) string {
 			}
 			continue
 		}
-
 		if ch >= 0x20 && ch <= 0x7e {
 			b.WriteByte(ch)
 			lastWasSpace = false
@@ -172,7 +118,6 @@ func sanitizeBanner(raw []byte) string {
 			}
 		}
 	}
-
 	return strings.TrimSpace(b.String())
 }
 
@@ -180,7 +125,6 @@ func SupportsPassiveBanner(port int) bool {
 	switch port {
 	case 21, 22, 25, 110, 143, 587, 3306:
 		return true
-
 	default:
 		return false
 	}
@@ -191,7 +135,6 @@ func SupportsTLSProbe(port int, serviceName string) bool {
 	case "HTTPS", "SMTPS", "IMAPS", "POP3S":
 		return true
 	}
-
 	switch port {
 	case 443, 465, 993, 995, 8443:
 		return true
@@ -202,48 +145,41 @@ func SupportsTLSProbe(port int, serviceName string) bool {
 
 func ProbeHTTP(
 	ctx context.Context,
-	target string,
+	targetIP string,
+	hostname string,
 	port int,
 	timeout time.Duration,
 ) (HTTPProbeResult, error) {
 	scheme := "http"
-
 	if port == 443 || port == 8443 {
 		scheme = "https"
 	}
 
-	url := fmt.Sprintf(
-		"%s://%s:%d",
-		scheme,
-		target,
-		port,
-	)
+	url := fmt.Sprintf("%s://%s:%d", scheme, targetIP, port)
 
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: true,
+			ServerName:         hostname,
 		},
+		DisableKeepAlives: true,
 	}
 
 	client := &http.Client{
 		Timeout:   timeout,
 		Transport: transport,
-		CheckRedirect: func(
-			req *http.Request,
-			via []*http.Request,
-		) error {
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
 
-	req, err := http.NewRequestWithContext(
-		ctx,
-		http.MethodHead,
-		url,
-		nil,
-	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, url, nil)
 	if err != nil {
 		return HTTPProbeResult{}, err
+	}
+
+	if hostname != "" {
+		req.Host = hostname
 	}
 
 	resp, err := client.Do(req)
@@ -261,18 +197,13 @@ func ProbeHTTP(
 
 func ProbeTLS(
 	ctx context.Context,
-	target string,
+	targetIP string,
+	hostname string,
 	port int,
 	timeout time.Duration,
 ) (TLSProbeResult, error) {
-	address := net.JoinHostPort(
-		target,
-		fmt.Sprintf("%d", port),
-	)
-
-	dialer := &net.Dialer{
-		Timeout: timeout,
-	}
+	address := net.JoinHostPort(targetIP, fmt.Sprintf("%d", port))
+	dialer := &net.Dialer{Timeout: timeout}
 
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline)
@@ -287,6 +218,7 @@ func ProbeTLS(
 		address,
 		&tls.Config{
 			InsecureSkipVerify: true,
+			ServerName:         hostname,
 		},
 	)
 	if err != nil {
@@ -295,28 +227,23 @@ func ProbeTLS(
 	defer conn.Close()
 
 	state := conn.ConnectionState()
-
 	result := TLSProbeResult{
 		Version: tlsVersionName(state.Version),
 	}
 
 	if len(state.PeerCertificates) > 0 {
 		cert := state.PeerCertificates[0]
-
 		result.Subject = cert.Subject.CommonName
 		if result.Subject == "" && len(cert.Subject.Organization) > 0 {
 			result.Subject = cert.Subject.Organization[0]
 		}
-
 		result.Issuer = cert.Issuer.CommonName
 		if result.Issuer == "" && len(cert.Issuer.Organization) > 0 {
 			result.Issuer = cert.Issuer.Organization[0]
 		}
-
 		if len(cert.DNSNames) > 0 {
 			result.SANs = strings.Join(cert.DNSNames, ",")
 		}
-
 		result.NotAfter = cert.NotAfter.UTC().Format(time.RFC3339)
 	}
 

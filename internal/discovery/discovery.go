@@ -23,17 +23,30 @@ func DiscoverHost(
 		Method: "icmp",
 	}
 
-	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
+	var conn *icmp.PacketConn
+	var err error
+	var privileged bool
+
+	conn, err = icmp.ListenPacket("udp4", "0.0.0.0")
 	if err != nil {
-		result.Reason = "socket-error"
-		return result, fmt.Errorf("open ICMP socket: %w", err)
+		conn, err = icmp.ListenPacket("ip4:icmp", "0.0.0.0")
+		if err != nil {
+			result.Reason = "socket-error"
+			return result, fmt.Errorf("open ICMP socket: %w", err)
+		}
+		privileged = true
 	}
 	defer conn.Close()
 
-	dst, err := net.ResolveIPAddr("ip4", target)
-	if err != nil {
-		result.Reason = "resolve-error"
-		return result, fmt.Errorf("resolve target %q: %w", target, err)
+	var dst net.Addr
+	if privileged {
+		dst, err = net.ResolveIPAddr("ip4", target)
+		if err != nil {
+			result.Reason = "resolve-error"
+			return result, fmt.Errorf("resolve target %q: %w", target, err)
+		}
+	} else {
+		dst = &net.UDPAddr{IP: net.ParseIP(target)}
 	}
 
 	message := icmp.Message{
@@ -60,7 +73,6 @@ func DiscoverHost(
 	}
 
 	deadline := time.Now().Add(timeout)
-
 	if ctxDeadline, ok := ctx.Deadline(); ok && ctxDeadline.Before(deadline) {
 		deadline = ctxDeadline
 	}
@@ -84,24 +96,24 @@ func DiscoverHost(
 				result.Reason = "context-canceled"
 				return result, ctx.Err()
 			}
-
 			result.Reason = "timeout"
 			return result, nil
 		}
 
-		if peer.String() != dst.String() {
+		var peerIP string
+		switch p := peer.(type) {
+		case *net.UDPAddr:
+			peerIP = p.IP.String()
+		case *net.IPAddr:
+			peerIP = p.IP.String()
+		}
+
+		if peerIP != target {
 			continue
 		}
 
-		reply, err := icmp.ParseMessage(
-			ipv4.ICMPTypeEchoReply.Protocol(),
-			buffer[:n],
-		)
-		if err != nil {
-			continue
-		}
-
-		if reply.Type != ipv4.ICMPTypeEchoReply {
+		reply, err := icmp.ParseMessage(ipv4.ICMPTypeEchoReply.Protocol(), buffer[:n])
+		if err != nil || reply.Type != ipv4.ICMPTypeEchoReply {
 			continue
 		}
 
@@ -132,43 +144,23 @@ func DiscoverHostTCP(
 			return result, err
 		}
 
-		address := net.JoinHostPort(
-			target,
-			fmt.Sprintf("%d", port),
-		)
-
-		dialer := net.Dialer{
-			Timeout: timeout,
-		}
-
+		address := net.JoinHostPort(target, fmt.Sprintf("%d", port))
+		dialer := net.Dialer{Timeout: timeout}
 		start := time.Now()
 
-		conn, err := dialer.DialContext(
-			ctx,
-			"tcp",
-			address,
-		)
+		conn, err := dialer.DialContext(ctx, "tcp", address)
 		if err == nil {
 			conn.Close()
-
 			result.Alive = true
 			result.RTT = time.Since(start)
-			result.Reason = fmt.Sprintf(
-				"connection-established port-%d",
-				port,
-			)
-
+			result.Reason = fmt.Sprintf("connection-established port-%d", port)
 			return result, nil
 		}
 
 		if isConnectionRefused(err) {
 			result.Alive = true
 			result.RTT = time.Since(start)
-			result.Reason = fmt.Sprintf(
-				"connection-refused port-%d",
-				port,
-			)
-
+			result.Reason = fmt.Sprintf("connection-refused port-%d", port)
 			return result, nil
 		}
 	}
@@ -179,7 +171,6 @@ func DiscoverHostTCP(
 
 func buildFallbackPorts(hintPorts []int) []int {
 	const maxFallbackPorts = 4
-
 	defaults := []int{80, 443, 22}
 	seen := make(map[int]struct{}, maxFallbackPorts)
 	ports := make([]int, 0, maxFallbackPorts)

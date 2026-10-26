@@ -6,7 +6,12 @@ import (
 	"net"
 )
 
-func ParseTarget(target string) ([]string, error) {
+type TargetInfo struct {
+	IP       string
+	Hostname string
+}
+
+func ParseTarget(target string) ([]TargetInfo, error) {
 	if target == "" {
 		return nil, fmt.Errorf("target cannot be empty")
 	}
@@ -17,7 +22,7 @@ func ParseTarget(target string) ([]string, error) {
 			return nil, fmt.Errorf("only IPv4 targets are supported")
 		}
 
-		return []string{ipv4.String()}, nil
+		return []TargetInfo{{IP: ipv4.String(), Hostname: ""}}, nil
 	}
 
 	if _, network, err := net.ParseCIDR(target); err == nil {
@@ -37,8 +42,7 @@ func ParseTarget(target string) ([]string, error) {
 		)
 	}
 
-	var result []string
-
+	var result []TargetInfo
 	seen := make(map[string]struct{})
 
 	for _, ip := range ips {
@@ -48,13 +52,15 @@ func ParseTarget(target string) ([]string, error) {
 		}
 
 		address := ipv4.String()
-
 		if _, exists := seen[address]; exists {
 			continue
 		}
 
 		seen[address] = struct{}{}
-		result = append(result, address)
+		result = append(result, TargetInfo{
+			IP:       address,
+			Hostname: target,
+		})
 	}
 
 	if len(result) == 0 {
@@ -67,7 +73,7 @@ func ParseTarget(target string) ([]string, error) {
 	return result, nil
 }
 
-func expandIPv4Network(network *net.IPNet) ([]string, error) {
+func expandIPv4Network(network *net.IPNet) ([]TargetInfo, error) {
 	ip := network.IP.To4()
 	if ip == nil {
 		return nil, fmt.Errorf("only IPv4 networks are supported")
@@ -88,21 +94,22 @@ func expandIPv4Network(network *net.IPNet) ([]string, error) {
 	hostBits := bits - ones
 	count := 1 << hostBits
 
-	targets := make([]string, 0, count)
-
+	targets := make([]TargetInfo, 0, count)
 	base := binary.BigEndian.Uint32(ip)
 
 	for i := 0; i < count; i++ {
 		current := base + uint32(i)
-
-		target := net.IPv4(
+		targetIP := net.IPv4(
 			byte(current>>24),
 			byte(current>>16),
 			byte(current>>8),
 			byte(current),
 		).String()
 
-		targets = append(targets, target)
+		targets = append(targets, TargetInfo{
+			IP:       targetIP,
+			Hostname: "",
+		})
 	}
 
 	return targets, nil
