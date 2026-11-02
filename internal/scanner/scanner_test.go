@@ -5,6 +5,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 func TestScanPortOpen(t *testing.T) {
@@ -23,6 +25,7 @@ func TestScanPortOpen(t *testing.T) {
 		[]int{port},
 		time.Second,
 		sem,
+		nil,
 	)
 
 	if len(results) != 1 {
@@ -50,6 +53,7 @@ func TestScanPortClosed(t *testing.T) {
 		[]int{port},
 		time.Second,
 		sem,
+		nil,
 	)
 
 	if len(results) != 1 {
@@ -72,6 +76,7 @@ func TestScanPortUnknownOnCanceledContext(t *testing.T) {
 		[]int{22, 80, 443},
 		time.Second,
 		sem,
+		nil,
 	)
 
 	if len(results) != 3 {
@@ -82,5 +87,31 @@ func TestScanPortUnknownOnCanceledContext(t *testing.T) {
 		if result.State != PortUnknown {
 			t.Fatalf("results[%d].State = %q, want %q", i, result.State, PortUnknown)
 		}
+	}
+}
+
+func TestScanPortsRateLimiterDelaysAdditionalRequests(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	sem := make(chan struct{}, 2)
+	limiter := rate.NewLimiter(10, 1)
+
+	start := time.Now()
+	results := ScanPorts(
+		ctx,
+		"127.0.0.1",
+		[]int{1, 2},
+		time.Second,
+		sem,
+		limiter,
+	)
+	elapsed := time.Since(start)
+
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+	if elapsed < 50*time.Millisecond {
+		t.Fatalf("scan finished in %v; expected rate limiter to delay it", elapsed)
 	}
 }

@@ -4,11 +4,102 @@ import (
 	"encoding/binary"
 	"fmt"
 	"net"
+	"strings"
 )
 
 type TargetInfo struct {
 	IP       string
 	Hostname string
+}
+
+// prohibitedNetworks lists destinations that must never be contacted by a
+// scan: cloud instance metadata (IMDS), multicast, and limited broadcast.
+// They are parsed once at package initialization and treated as read-only.
+var prohibitedNetworks = mustParseCIDRs(
+	"169.254.169.254/32",
+	"224.0.0.0/4",
+	"255.255.255.255/32",
+)
+
+func mustParseCIDRs(cidrs ...string) []*net.IPNet {
+	networks := make([]*net.IPNet, 0, len(cidrs))
+	for _, cidr := range cidrs {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(fmt.Sprintf("utils: invalid prohibited CIDR %q: %v", cidr, err))
+		}
+		networks = append(networks, network)
+	}
+	return networks
+}
+
+// FilterTargets returns the subset of targets that is neither part of the
+// built-in prohibited networks nor covered by any IP/CIDR in excludes.
+// Invalid exclude entries are ignored so a single typo does not abort a scan.
+func FilterTargets(targets []TargetInfo, excludes []string) []TargetInfo {
+	excludedNetworks := parseExcludeNetworks(excludes)
+	filtered := make([]TargetInfo, 0, len(targets))
+
+	for _, target := range targets {
+		ip := net.ParseIP(target.IP)
+		if ip == nil {
+			filtered = append(filtered, target)
+			continue
+		}
+		if isProhibitedTarget(ip) || isExcludedTarget(ip, excludedNetworks) {
+			continue
+		}
+		filtered = append(filtered, target)
+	}
+
+	return filtered
+}
+
+func isProhibitedTarget(ip net.IP) bool {
+	for _, network := range prohibitedNetworks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func isExcludedTarget(ip net.IP, networks []*net.IPNet) bool {
+	for _, network := range networks {
+		if network.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func parseExcludeNetworks(excludes []string) []*net.IPNet {
+	networks := make([]*net.IPNet, 0, len(excludes))
+
+	for _, entry := range excludes {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		if ip := net.ParseIP(entry); ip != nil {
+			bits := 32
+			if ip.To4() == nil {
+				bits = 128
+			}
+			networks = append(networks, &net.IPNet{
+				IP:   ip,
+				Mask: net.CIDRMask(bits, bits),
+			})
+			continue
+		}
+
+		if _, network, err := net.ParseCIDR(entry); err == nil {
+			networks = append(networks, network)
+		}
+	}
+
+	return networks
 }
 
 func ParseTarget(target string) ([]TargetInfo, error) {

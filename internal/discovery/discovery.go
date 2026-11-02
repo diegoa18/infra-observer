@@ -11,12 +11,14 @@ import (
 
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/time/rate"
 )
 
 func DiscoverHost(
 	ctx context.Context,
 	target string,
 	timeout time.Duration,
+	rateLimiter *rate.Limiter,
 ) (Result, error) {
 	result := Result{
 		IP:     target,
@@ -63,6 +65,10 @@ func DiscoverHost(
 	if err != nil {
 		result.Reason = "marshal-error"
 		return result, fmt.Errorf("marshal ICMP request: %w", err)
+	}
+
+	if rateLimiter != nil {
+		_ = rateLimiter.Wait(ctx)
 	}
 
 	start := time.Now()
@@ -129,6 +135,7 @@ func DiscoverHostTCP(
 	ctx context.Context,
 	target string,
 	timeout time.Duration,
+	rateLimiter *rate.Limiter,
 	hintPorts ...int,
 ) (Result, error) {
 	result := Result{
@@ -146,6 +153,11 @@ func DiscoverHostTCP(
 
 		address := net.JoinHostPort(target, fmt.Sprintf("%d", port))
 		dialer := net.Dialer{Timeout: timeout}
+
+		if rateLimiter != nil {
+			_ = rateLimiter.Wait(ctx)
+		}
+
 		start := time.Now()
 
 		conn, err := dialer.DialContext(ctx, "tcp", address)

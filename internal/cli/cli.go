@@ -4,6 +4,8 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -16,6 +18,8 @@ import (
 	"infra-observer/internal/output"
 	"infra-observer/internal/storage/postgres"
 	"infra-observer/internal/utils"
+
+	"golang.org/x/time/rate"
 )
 
 const version = "1.0.0"
@@ -75,12 +79,19 @@ func printUsage() {
 	fmt.Println("  -store              Store observations in PostgreSQL")
 	fmt.Println("  -diff               Show changes immediately after storing (requires -store)")
 	fmt.Println("  -audit              Exit with code 2 if network drift is detected (requires -diff)")
+	fmt.Println("  -exclude <list>     Comma-separated IPs or CIDRs to exclude")
+	fmt.Println("  -rate <pps>         Maximum packets per second (0 = unlimited)")
 	fmt.Println()
 	fmt.Println("History flags:")
 	fmt.Println("  -limit <n>          Maximum observations to show")
 }
 
-func prepareArgs(args []string, boolFlags []string) []string {
+// prepareArgs moves positional arguments behind flags so that the standard
+// library flag package can parse flags placed after the target. boolFlags
+// lists flags that take no value; valueFlags lists flags that consume the
+// following argument. Flags not listed as boolean are treated as value flags
+// too, preserving the previous behavior for unclassified flags.
+func prepareArgs(args []string, boolFlags []string, valueFlags ...string) []string {
 	var flags []string
 	var pos []string
 	isBool := func(f string) bool {
@@ -92,10 +103,19 @@ func prepareArgs(args []string, boolFlags []string) []string {
 		}
 		return false
 	}
+	isValue := func(f string) bool {
+		f = strings.TrimLeft(f, "-")
+		for _, v := range valueFlags {
+			if f == v {
+				return true
+			}
+		}
+		return false
+	}
 	for i := 0; i < len(args); i++ {
 		if strings.HasPrefix(args[i], "-") {
 			flags = append(flags, args[i])
-			if !isBool(args[i]) && i+1 < len(args) {
+			if (isValue(args[i]) || !isBool(args[i])) && i+1 < len(args) {
 				flags = append(flags, args[i+1])
 				i++
 			}
@@ -117,9 +137,18 @@ func handleScan(args []string) error {
 	asJSON := cmd.Bool("json", false, "Output results in JSON format")
 	diff := cmd.Bool("diff", false, "Show changes after store")
 	audit := cmd.Bool("audit", false, "Exit code 2 on changes")
+	exclude := cmd.String("exclude", "", "Comma-separated IPs or CIDRs to exclude")
+	rateLimit := cmd.Int("rate", 0, "Max packets per second (0 = unlimited)")
 
 	cmd.SetOutput(os.Stderr)
-	args = prepareArgs(args, []string{"no-discovery", "probe", "store", "json", "diff", "audit"})
+	// -exclude and -rate take a value, so they are declared as value flags:
+	// prepareArgs consumes the following token for them, which also supports
+	// the target-first form.
+	args = prepareArgs(
+		args,
+		[]string{"no-discovery", "probe", "store", "json", "diff", "audit"},
+		"p", "timeout", "concurrency", "exclude", "rate",
+	)
 
 	if err := cmd.Parse(args); err != nil {
 		return err
@@ -133,6 +162,24 @@ func handleScan(args []string) error {
 		return fmt.Errorf("invalid target: %w", err)
 	}
 
+	var excludes []string
+	if strings.TrimSpace(*exclude) != "" {
+		excludes = strings.Split(*exclude, ",")
+	}
+	targets = utils.FilterTargets(targets, excludes)
+	if len(targets) == 0 {
+		return fmt.Errorf("no targets remain after applying native and requested exclusions")
+	}
+
+	if *rateLimit < 0 {
+		return fmt.Errorf("rate must be zero or greater")
+	}
+
+	var rateLimiter *rate.Limiter
+	if *rateLimit > 0 {
+		rateLimiter = rate.NewLimiter(rate.Limit(*rateLimit), 1)
+	}
+
 	ports, err := utils.ParsePortRange(*portRange)
 	if err != nil {
 		return fmt.Errorf("invalid ports: %w", err)
@@ -144,6 +191,7 @@ func handleScan(args []string) error {
 		Concurrency: *concurrency,
 		Discovery:   !*noDiscovery,
 		HTTPProbe:   *probe,
+		RateLimiter: rateLimiter,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -330,6 +378,8 @@ func openDatabase(ctx context.Context) (domain.Repository, error) {
 	if databaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL is required")
 	}
+	warnIfInsecureDatabaseURL(databaseURL)
+
 	connectCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
@@ -338,4 +388,39 @@ func openDatabase(ctx context.Context) (domain.Repository, error) {
 		return nil, err
 	}
 	return store, nil
+}
+
+// warnIfInsecureDatabaseURL emits a non-blocking warning when a remote
+// PostgreSQL endpoint is configured with sslmode=disable, which would send
+// credentials and inventory data in clear text.
+func warnIfInsecureDatabaseURL(databaseURL string) {
+	parsed, err := url.Parse(databaseURL)
+	if err != nil {
+		return
+	}
+
+	host := parsed.Hostname()
+	if host == "" || isLoopbackHost(host) {
+		return
+	}
+	if parsed.Query().Get("sslmode") != "disable" {
+		return
+	}
+
+	warning := "[WARN] Conectando a base de datos remota sin cifrado (sslmode=disable). Tráfico expuesto."
+	if info, statErr := os.Stderr.Stat(); statErr == nil && info.Mode()&os.ModeCharDevice != 0 {
+		fmt.Fprintf(os.Stderr, "\x1b[33m%s\x1b[0m\n", warning)
+		return
+	}
+	fmt.Fprintln(os.Stderr, warning)
+}
+
+func isLoopbackHost(host string) bool {
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }

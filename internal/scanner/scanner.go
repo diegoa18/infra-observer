@@ -8,6 +8,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/time/rate"
 )
 
 type PortState string
@@ -30,6 +32,7 @@ func ScanPorts(
 	ports []int,
 	timeout time.Duration,
 	sem chan struct{},
+	rateLimiter *rate.Limiter,
 ) []PortResult {
 	if len(ports) == 0 {
 		return nil
@@ -55,7 +58,7 @@ func ScanPorts(
 			case sem <- struct{}{}:
 			}
 
-			results[index] = scanPort(ctx, target, port, timeout)
+			results[index] = scanPort(ctx, target, port, timeout, rateLimiter)
 			<-sem
 		}(i, p)
 	}
@@ -69,6 +72,7 @@ func scanPort(
 	target string,
 	port int,
 	timeout time.Duration,
+	rateLimiter *rate.Limiter,
 ) PortResult {
 	result := PortResult{
 		Port:  port,
@@ -77,6 +81,10 @@ func scanPort(
 
 	address := net.JoinHostPort(target, fmt.Sprintf("%d", port))
 	dialer := net.Dialer{Timeout: timeout}
+
+	if rateLimiter != nil {
+		_ = rateLimiter.Wait(ctx)
+	}
 
 	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {

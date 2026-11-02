@@ -13,6 +13,8 @@ import (
 	"infra-observer/internal/domain"
 	"infra-observer/internal/scanner"
 	"infra-observer/internal/utils"
+
+	"golang.org/x/time/rate"
 )
 
 const maxConcurrentHosts = 16
@@ -23,6 +25,7 @@ type ScanOptions struct {
 	Concurrency int
 	Discovery   bool
 	HTTPProbe   bool
+	RateLimiter *rate.Limiter
 }
 
 type ScanService struct{}
@@ -131,7 +134,7 @@ func (s *ScanService) scanTarget(
 		return domain.Observation{}, false, nil
 	}
 
-	portResults := scanner.ScanPorts(ctx, target.IP, opts.Ports, opts.Timeout, sem)
+	portResults := scanner.ScanPorts(ctx, target.IP, opts.Ports, opts.Timeout, sem, opts.RateLimiter)
 	if err := ctx.Err(); err != nil {
 		return domain.Observation{}, false, err
 	}
@@ -187,7 +190,7 @@ func (s *ScanService) discover(
 		}, nil
 	}
 
-	icmpResult, icmpErr := discovery.DiscoverHost(ctx, ip, opts.Timeout)
+	icmpResult, icmpErr := discovery.DiscoverHost(ctx, ip, opts.Timeout, opts.RateLimiter)
 	if icmpErr == nil && icmpResult.Alive {
 		return icmpResult, nil
 	}
@@ -195,7 +198,7 @@ func (s *ScanService) discover(
 		return icmpResult, ctx.Err()
 	}
 
-	tcpResult, tcpErr := discovery.DiscoverHostTCP(ctx, ip, opts.Timeout, opts.Ports...)
+	tcpResult, tcpErr := discovery.DiscoverHostTCP(ctx, ip, opts.Timeout, opts.RateLimiter, opts.Ports...)
 	if tcpErr == nil && tcpResult.Alive {
 		return tcpResult, nil
 	}

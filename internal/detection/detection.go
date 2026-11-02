@@ -194,8 +194,8 @@ func ProbeHTTP(
 
 	return HTTPProbeResult{
 		StatusCode: resp.StatusCode,
-		Server:     resp.Header.Get("Server"),
-		PoweredBy:  resp.Header.Get("X-Powered-By"),
+		Server:     sanitizeBanner([]byte(resp.Header.Get("Server"))),
+		PoweredBy:  sanitizeBanner([]byte(resp.Header.Get("X-Powered-By"))),
 	}, nil
 }
 
